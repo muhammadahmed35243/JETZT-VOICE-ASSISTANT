@@ -1,0 +1,20 @@
+# Fly.io app config — voice backend only (the admin portal deploys to
+# Vercel separately; see docs/voice-agent-plan.md Architecture).
+# Run `fly launch` once to create the app, then `fly deploy`. Update `app`
+# below to whatever name that assigns.
+app = "jetzt-voice-agent"
+primary_region = "iad" # Ashburn, VA — matches the Telnyx connection's anchorsite (see docs/what-already-done-in-dialer.md §2)
+
+[build]
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false   # keep at least one instance warm — inbound calls can't wait on a cold start
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 512
