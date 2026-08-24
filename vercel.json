@@ -1,7 +1,7 @@
 {
   "functions": {
     "app/api/media-stream/route.ts": {
-      "maxDuration": 800
+      "maxDuration": 300
     }
   }
 }

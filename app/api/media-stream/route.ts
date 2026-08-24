@@ -5,10 +5,14 @@ import { handleMediaStreamConnection } from "@/telnyx/mediaStream";
 // with server-only credentials.
 export const runtime = "nodejs";
 // Calls average ~3 minutes; this caps how long a single call's connection
-// can stay open before Vercel forcibly closes it (see README — Fluid
-// Compute + an extended maxDuration both need enabling in the Vercel
-// project settings, this alone doesn't raise the platform ceiling).
-export const maxDuration = 800;
+// can stay open before Vercel forcibly closes it. 300 is the current plan's
+// ceiling — Vercel rejected 800 at deploy time ("must be between 1 and 300
+// seconds... upgrade your plan"), so the extended duration isn't just a
+// Pro/Enterprise checkbox, it needs something beyond the base plan tier.
+// 300s still covers the ~3-minute average with headroom; a call running
+// past 5 minutes would get cut off — worth revisiting if that turns out to
+// matter in practice.
+export const maxDuration = 300;
 
 /**
  * `experimental_upgradeWebSocket` is genuinely experimental (Vercel's own

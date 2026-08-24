@@ -69,10 +69,15 @@ calls:
   dropped connection reconnecting may land on a fresh instance that
   "knows nothing about the previous one." For a phone call, a dropped
   connection is just a dead call — there's no graceful mid-call recovery.
-- **Duration cap.** `maxDuration: 800` is set in `vercel.json` and on the
-  route itself, but Fluid Compute (required for WebSocket support at all)
-  has to be turned on in the Vercel project's settings — that's a
-  dashboard step, not something a config file can do.
+- **Duration cap.** `maxDuration` is `300` (in `vercel.json` and on the
+  route itself) — the actual ceiling on the current plan; deploying with
+  `800` was rejected outright ("must be between 1 and 300 seconds...
+  upgrade your plan"), so the longer duration needs more than a Pro
+  subscription to unlock. 300s covers the ~3-minute average call with
+  headroom, but anything past 5 minutes would get cut off. Separately,
+  Fluid Compute (required for WebSocket support at all) has to be turned
+  on in the Vercel project's settings — a dashboard step, not something a
+  config file can do.
 - **The exact socket API surface Vercel hands us wasn't fully
   confirmable without a live `vercel dev` run** — see the comment on
   `MediaSocket` in `src/telnyx/mediaStream.ts`.
