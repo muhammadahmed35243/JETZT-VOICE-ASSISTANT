@@ -1,5 +1,5 @@
 import nacl from "tweetnacl";
-import { config } from "../config.js";
+import { config } from "../config";
 
 /**
  * Mirrors the dialer's verifyTelnyxSignature() in lib/telnyx.ts: Telnyx signs

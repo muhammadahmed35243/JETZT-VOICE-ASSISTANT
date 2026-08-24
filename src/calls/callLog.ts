@@ -1,4 +1,4 @@
-import { supabase } from "../supabase/client.js";
+import { supabase } from "../supabase/client";
 
 type TranscriptTurn = { role: "caller" | "agent"; text: string; at: string };
 

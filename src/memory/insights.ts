@@ -1,5 +1,5 @@
-import { supabase } from "../supabase/client.js";
-import { embedText } from "../agent/embeddings.js";
+import { supabase } from "../supabase/client";
+import { embedText } from "../agent/embeddings";
 
 /**
  * Middle and top tiers of the memory/learning policy

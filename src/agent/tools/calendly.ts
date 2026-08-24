@@ -1,14 +1,14 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import { config } from "../../config.js";
-import { EMAIL_CONFIRMATION_INSTRUCTIONS, isPlausibleEmail } from "../emailConfirm.js";
+import { config } from "../../config";
+import { EMAIL_CONFIRMATION_INSTRUCTIONS, isPlausibleEmail } from "../emailConfirm";
 import {
   eventUuidFromUri,
   findActiveBooking,
   markCancelled,
   recordBooking,
   replaceWithReschedule,
-} from "../../calendly/bookings.js";
+} from "../../calendly/bookings";
 
 const CALENDLY_API = "https://api.calendly.com";
 

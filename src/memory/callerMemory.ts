@@ -1,4 +1,4 @@
-import { supabase } from "../supabase/client.js";
+import { supabase } from "../supabase/client";
 
 /** Per-caller memory — lowest tier of the memory policy, auto-applied. */
 export async function getCallerMemory(

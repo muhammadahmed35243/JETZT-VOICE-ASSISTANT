@@ -1,10 +1,6 @@
-import { config as loadEnv } from "dotenv";
-
-// .env.local matches the dialer app's convention (see
-// docs/what-already-done-in-dialer.md) — load it first so its values win,
-// then fall back to .env for anything it doesn't set.
-loadEnv({ path: ".env.local" });
-loadEnv({ path: ".env" });
+// Next.js loads .env.local itself (both in `next dev` and at Vercel build
+// time) — no manual dotenv wiring needed here the way the standalone
+// Express version required.
 
 function required(name: string): string {
   const value = process.env[name];
@@ -19,7 +15,9 @@ function optional(name: string): string | undefined {
 }
 
 export const config = {
-  port: Number(process.env.PORT) || 8080,
+  // A stable custom domain, not Vercel's per-deployment VERCEL_URL — the
+  // Telnyx connection's webhook_event_url is fixed at the connection
+  // level, so it needs one address that doesn't change between deploys.
   publicBaseUrl: required("PUBLIC_BASE_URL"),
 
   telnyx: {

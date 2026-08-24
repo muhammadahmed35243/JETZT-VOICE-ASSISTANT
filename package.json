@@ -2,12 +2,11 @@
   "name": "jetzt-voice-agent",
   "version": "0.1.0",
   "private": true,
-  "type": "module",
-  "description": "Inbound AI voice agent backend for JETZT — Telnyx Call Control + Media Streaming, Deepgram STT/TTS, LangGraph (GPT-4o + tools), Supabase.",
+  "description": "Inbound AI voice agent backend for JETZT — Telnyx Call Control + Media Streaming, Deepgram STT/TTS, LangGraph (GPT-4o + tools), Supabase. Deploys standalone on Vercel; shares a database with the dialer app, not a codebase.",
   "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "build": "tsc -p tsconfig.json",
-    "start": "node dist/server.js",
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -17,18 +16,19 @@
     "@langchain/langgraph-checkpoint-postgres": "^0.0.3",
     "@langchain/openai": "^0.3.16",
     "@supabase/supabase-js": "^2.47.10",
-    "dotenv": "^16.4.7",
-    "express": "^4.21.2",
+    "@vercel/functions": "^3.9.5",
+    "next": "^15.1.4",
     "openai": "^4.77.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
     "tweetnacl": "^1.0.3",
     "ws": "^8.18.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@types/express": "^5.0.0",
     "@types/node": "^22.10.5",
+    "@types/react": "^19.0.2",
     "@types/ws": "^8.5.13",
-    "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }
 }

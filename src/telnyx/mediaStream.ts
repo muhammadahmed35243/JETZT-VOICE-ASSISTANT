@@ -1,13 +1,19 @@
-import type { WebSocket } from "ws";
-import { openSttStream } from "../stt/deepgramStt.js";
-import { synthesizeSpeech } from "../tts/deepgramTts.js";
-import { runTurn } from "../agent/graph.js";
-import { extractAndApply } from "../memory/extraction.js";
+import type { WebSocket as MediaSocket } from "ws";
+import { openSttStream } from "../stt/deepgramStt";
+import { synthesizeSpeech } from "../tts/deepgramTts";
+import { runTurn } from "../agent/graph";
+import { extractAndApply } from "../memory/extraction";
 import {
   appendTranscriptTurn,
   finalizeCallLog,
   getTranscriptText,
-} from "../calls/callLog.js";
+} from "../calls/callLog";
+
+// `experimental_upgradeWebSocket` (from `@vercel/functions`) hands its
+// handler a real `ws` package WebSocket — confirmed from that package's own
+// .d.ts, not assumed — so this can use the actual `ws` type directly rather
+// than a defensive duck-typed stand-in.
+export type { MediaSocket };
 
 interface CallSession {
   callControlId: string;
@@ -28,13 +34,19 @@ interface CallSession {
  * wasn't confirmable byte-for-byte from docs alone (see
  * src/telnyx/callControl.ts).
  */
-export function handleMediaStreamConnection(ws: WebSocket) {
+function rawDataToString(data: Buffer | ArrayBuffer | Buffer[]): string {
+  if (Buffer.isBuffer(data)) return data.toString();
+  if (Array.isArray(data)) return Buffer.concat(data).toString();
+  return Buffer.from(data).toString();
+}
+
+export function handleMediaStreamConnection(ws: MediaSocket) {
   let session: CallSession | null = null;
 
-  ws.on("message", async (raw: Buffer) => {
+  ws.on("message", async (raw) => {
     let msg: any;
     try {
-      msg = JSON.parse(raw.toString());
+      msg = JSON.parse(rawDataToString(raw));
     } catch {
       return;
     }
@@ -96,7 +108,7 @@ export function handleMediaStreamConnection(ws: WebSocket) {
   });
 }
 
-async function handleUtteranceEnd(session: CallSession | null, ws: WebSocket) {
+async function handleUtteranceEnd(session: CallSession | null, ws: MediaSocket) {
   if (!session || session.turnInFlight || session.utteranceBuffer.length === 0) return;
   const userText = session.utteranceBuffer.join(" ");
   session.utteranceBuffer = [];
@@ -114,7 +126,7 @@ async function handleUtteranceEnd(session: CallSession | null, ws: WebSocket) {
  */
 async function runAgentTurn(
   session: CallSession,
-  ws: WebSocket,
+  ws: MediaSocket,
   userText: string | null
 ) {
   session.turnInFlight = true;
@@ -144,17 +156,24 @@ function splitSentences(text: string): string[] {
   );
 }
 
-async function speak(session: CallSession, ws: WebSocket, text: string) {
+async function speak(session: CallSession, ws: MediaSocket, text: string) {
   for (const sentence of splitSentences(text)) {
     for await (const chunk of synthesizeSpeech(sentence)) {
       if (ws.readyState !== ws.OPEN) return;
-      ws.send(
-        JSON.stringify({
-          event: "media",
-          stream_id: session.streamId,
-          media: { payload: chunk.toString("base64") },
-        })
-      );
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "media",
+            stream_id: session.streamId,
+            media: { payload: chunk.toString("base64") },
+          })
+        );
+      } catch (err) {
+        // Socket already closed (caller hung up mid-response) — stop
+        // synthesizing the rest rather than throwing.
+        console.error(`send() failed for call ${session.callControlId}, stopping:`, err);
+        return;
+      }
     }
   }
 }

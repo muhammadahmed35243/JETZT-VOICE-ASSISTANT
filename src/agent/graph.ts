@@ -4,17 +4,17 @@ import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 
-import { config } from "../config.js";
-import { buildSystemPrompt } from "./systemPrompt.js";
-import { kbLookupTool } from "./tools/kbLookup.js";
-import { lookupLeadTool, updateLeadNoteTool } from "./tools/businessData.js";
+import { config } from "../config";
+import { buildSystemPrompt } from "./systemPrompt";
+import { kbLookupTool } from "./tools/kbLookup";
+import { lookupLeadTool, updateLeadNoteTool } from "./tools/businessData";
 import {
   getAvailableSlotsTool,
   bookMeetingTool,
   cancelMeetingTool,
   rescheduleMeetingTool,
-} from "./tools/calendly.js";
-import { takeMessageTool } from "./tools/takeMessage.js";
+} from "./tools/calendly";
+import { takeMessageTool } from "./tools/takeMessage";
 
 const tools = [
   kbLookupTool,

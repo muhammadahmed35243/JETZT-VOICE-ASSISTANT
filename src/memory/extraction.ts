@@ -1,9 +1,9 @@
 import OpenAI from "openai";
 import { zodResponseFormat } from "openai/helpers/zod";
 import { z } from "zod";
-import { config } from "../config.js";
-import { updateCallerMemory, getCallerMemory } from "./callerMemory.js";
-import { recordInsight } from "./insights.js";
+import { config } from "../config";
+import { updateCallerMemory, getCallerMemory } from "./callerMemory";
+import { recordInsight } from "./insights";
 
 const openai = new OpenAI({ apiKey: config.openai.apiKey });
 

@@ -1,4 +1,4 @@
-import { config } from "../config.js";
+import { config } from "../config";
 
 const BASE_URL = "https://api.telnyx.com/v2";
 

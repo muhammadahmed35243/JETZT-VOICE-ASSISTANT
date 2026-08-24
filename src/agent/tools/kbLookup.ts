@@ -1,7 +1,7 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import { supabase } from "../../supabase/client.js";
-import { embedText } from "../embeddings.js";
+import { supabase } from "../../supabase/client";
+import { embedText } from "../embeddings";
 
 export const kbLookupTool = tool(
   async ({ query }: { query: string }) => {

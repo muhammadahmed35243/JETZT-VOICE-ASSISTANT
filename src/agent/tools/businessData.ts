@@ -1,16 +1,16 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import { supabase } from "../../supabase/client.js";
+import { supabase } from "../../supabase/client";
 
 /**
- * TODO(business-data-schema): the plan calls for this to read/write the
- * dialer's existing `leads` / `calls` tables (docs/voice-agent-plan.md,
- * "Pre-build checklist" is clear, but the exact column names weren't
- * available while scaffolding this repo — that schema lives with the
- * dialer app, not here. Both tools below are written defensively (they
- * catch and report a schema mismatch rather than throwing) so the agent
- * can fall back to the take-a-message tool instead of erroring out; update
- * the table/column names once the dialer's actual schema is confirmed.
+ * Reads/writes the dialer's real `leads` table (see `D:\Dialer\supabase\schema.sql`
+ * — columns: id, name, phone, email, company, notes, status, assigned_agent,
+ * uploaded_batch_id). Column is `phone`, not `phone_number` — fixed after
+ * actually reading that schema; an earlier version of this file guessed
+ * wrong. One residual risk, not fully verified: how `phone` is normalized
+ * on write by the dialer (e.g. with/without a `+1` prefix) — if lookups
+ * start coming back empty for callers who should exist, mismatched phone
+ * formatting is the first thing to check.
  */
 
 export const lookupLeadTool = tool(
@@ -18,7 +18,7 @@ export const lookupLeadTool = tool(
     const { data, error } = await supabase
       .from("leads")
       .select("*")
-      .eq("phone_number", phoneNumber)
+      .eq("phone", phoneNumber)
       .maybeSingle();
 
     if (error) {
@@ -44,7 +44,7 @@ export const updateLeadNoteTool = tool(
     const { error } = await supabase
       .from("leads")
       .update({ notes: note })
-      .eq("phone_number", phoneNumber);
+      .eq("phone", phoneNumber);
 
     if (error) {
       return `Couldn't save that to the lead record (${error.message}). Offer to take a message instead.`;

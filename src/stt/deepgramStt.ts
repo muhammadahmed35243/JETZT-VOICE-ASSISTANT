@@ -1,5 +1,5 @@
 import { createClient, LiveTranscriptionEvents } from "@deepgram/sdk";
-import { config } from "../config.js";
+import { config } from "../config";
 
 const deepgram = createClient(config.deepgram.apiKey);
 

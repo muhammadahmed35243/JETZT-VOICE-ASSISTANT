@@ -1,5 +1,5 @@
-import { supabase } from "../supabase/client.js";
-import { getCallerMemory } from "../memory/callerMemory.js";
+import { supabase } from "../supabase/client";
+import { getCallerMemory } from "../memory/callerMemory";
 
 /**
  * Core instructions + timely info are fetched fresh at the start of every

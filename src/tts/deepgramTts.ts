@@ -1,4 +1,4 @@
-import { config } from "../config.js";
+import { config } from "../config";
 
 /**
  * Synthesizes one chunk of agent speech with Deepgram Aura-2, streaming raw

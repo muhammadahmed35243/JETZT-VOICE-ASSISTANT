@@ -1,4 +1,4 @@
-import { supabase } from "../supabase/client.js";
+import { supabase } from "../supabase/client";
 
 export interface CalendlyBooking {
   id: string;

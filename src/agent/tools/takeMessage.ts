@@ -1,7 +1,7 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import { supabase } from "../../supabase/client.js";
-import { EMAIL_CONFIRMATION_INSTRUCTIONS, isPlausibleEmail } from "../emailConfirm.js";
+import { supabase } from "../../supabase/client";
+import { EMAIL_CONFIRMATION_INSTRUCTIONS, isPlausibleEmail } from "../emailConfirm";
 
 export const takeMessageTool = tool(
   async ({
