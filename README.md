@@ -15,15 +15,23 @@ The admin portal is still new pages inside the *dialer's* app, not here.
 
 ## Status
 
-Ported from a standalone Express/Fly.io service to Next.js on Vercel (see
-"Why Vercel" below). `npm run typecheck` and `npm run build` both pass
-cleanly against the real route set (`/api/health`, `/api/media-stream`,
-`/api/telnyx/webhook`) — confirmed by actually running them, not assumed.
-A live `next dev` smoke test was inconclusive in this environment
-(process-backgrounding quirks in the local shell, not a code error) — that
-and `vercel dev` (required specifically for `experimental_upgradeWebSocket`
-to work locally, per its own docs) are worth doing before trusting this
-further. Not yet deployed anywhere, and not yet run against a real call.
+**Deployed and live** at `https://customized-jetzt-voice-agentvercela.vercel.app`.
+Confirmed against the real deployment, not assumed:
+- `GET /api/health` → `200 {"ok":true}`
+- `POST /api/telnyx/webhook` with a bad signature → `403`, not a `500` —
+  proves `config.ts` loads cleanly with the env vars actually set in
+  Vercel, and signature verification is doing its job.
+- **A real WebSocket handshake against `/api/media-stream` succeeds** —
+  tested with an actual `ws` client, not curl (a plain `GET` there 500s,
+  which is expected for a WebSocket-only endpoint hit without real
+  upgrade headers, not a bug). This was the single biggest unknown in the
+  whole Vercel port — `experimental_upgradeWebSocket` genuinely works in
+  production, and Fluid Compute is correctly enabled.
+
+The Telnyx Call Control connection's `webhook_event_url` now points at
+this real domain (updated via the API). Not yet done: a real phone call
+end-to-end, and the number's inbound routing still hasn't been reassigned
+(deliberately — see below).
 
 Also fixed along the way, both confirmed against the installed packages
 rather than guessed:
@@ -41,10 +49,9 @@ rather than guessed:
 Done as part of setup already:
 - A new Telnyx Call Control connection exists (id `3033141056032998992`,
   name "JETZT Voice Agent"), created via the API — separate from the
-  dialer's `Cold Dialer` TeXML connection. Its `webhook_event_url` is
-  currently a placeholder (`https://jetzt-voice-agent.fly.dev/telnyx/webhook`,
-  from before the Vercel switch) — **update it once this has a real Vercel
-  URL**, via `PATCH /v2/call_control_applications/{id}`.
+  dialer's `Cold Dialer` TeXML connection. Its `webhook_event_url` now
+  points at the real deployment:
+  `https://customized-jetzt-voice-agentvercela.vercel.app/api/telnyx/webhook`.
 - `+12137580964`'s **inbound routing has deliberately not been
   reassigned** to this new connection yet — do that only once this service
   is actually deployed and reachable, or incoming calls will go
