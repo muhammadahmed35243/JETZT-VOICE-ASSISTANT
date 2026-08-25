@@ -137,12 +137,6 @@ settings — no CLI flag for it.
 
 ## Known follow-ups
 
-- **Recording storage** currently saves Telnyx's own recording URL
-  directly (`call.recording.saved` handler in
-  `app/api/telnyx/webhook/route.ts`). The plan calls for mirroring the
-  dialer's `lib/storage.ts` pattern (download + re-upload to Supabase
-  Storage) instead. Since this repo can now see the dialer's actual code,
-  this is portable now — not yet done.
 - **`leads.phone` normalization** — not verified how the dialer stores
   phone numbers (with/without `+1`, dashes, etc.). If lookups come back
   empty for callers who should exist, check this first.
