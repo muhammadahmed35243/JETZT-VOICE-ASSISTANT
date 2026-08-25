@@ -42,6 +42,25 @@ export function openSttStream({
   });
 
   let audioChunksSent = 0;
+  let closed = false;
+
+  // ErrorEvent/CloseEvent are Web-standard classes whose useful fields
+  // (.message, .error, .code, .reason) live behind prototype getters —
+  // blindly logging the object (e.g. via %j/JSON.stringify) showed
+  // "{type:'error',...}" and "{}" respectively, hiding the actual reason
+  // the connection died. Reading the named fields directly still works
+  // (property access invokes getters regardless of enumerability), just
+  // not through a generic serializer.
+  function describeEvent(event: any): Record<string, unknown> {
+    return {
+      type: event?.type,
+      message: event?.message,
+      error: event?.error?.message ?? event?.error,
+      code: event?.code,
+      reason: event?.reason,
+      wasClean: event?.wasClean,
+    };
+  }
 
   connection.on(LiveTranscriptionEvents.Open, () => {
     console.log("[stt] Deepgram connection opened");
@@ -62,16 +81,28 @@ export function openSttStream({
   });
 
   connection.on(LiveTranscriptionEvents.Close, (event: unknown) => {
-    console.log(`[stt] Deepgram connection closed after ${audioChunksSent} audio chunk(s) sent: %j`, event);
+    closed = true;
+    console.log(
+      `[stt] Deepgram connection closed after ${audioChunksSent} audio chunk(s) sent:`,
+      describeEvent(event)
+    );
   });
 
   connection.on(LiveTranscriptionEvents.Error, (err) => {
-    console.error("[stt] Deepgram error:", err);
+    closed = true;
+    console.error("[stt] Deepgram error:", describeEvent(err));
     onError(err);
   });
 
   return {
     sendAudio(chunk: Buffer) {
+      if (closed) {
+        // Connection already died — every subsequent 'media' frame was
+        // silently calling send() on a dead connection before this guard
+        // existed, for the rest of the call, with no way to tell from the
+        // logs that anything was wrong after the first error.
+        return;
+      }
       audioChunksSent++;
       if (audioChunksSent === 1 || audioChunksSent % 100 === 0) {
         console.log(`[stt] sendAudio: chunk #${audioChunksSent}, ${chunk.byteLength} bytes`);
