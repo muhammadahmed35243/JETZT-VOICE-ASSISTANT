@@ -5,7 +5,8 @@ import {
   startMediaStream,
   startRecording,
 } from "@/telnyx/callControl";
-import { createCallLog, attachRecordingUrl } from "@/calls/callLog";
+import { createCallLog } from "@/calls/callLog";
+import { saveRecordingForCall } from "@/storage";
 import { config } from "@/config";
 
 // Explicit Node.js runtime — this route uses Buffer/tweetnacl and talks to
@@ -75,10 +76,10 @@ async function handleEvent(
       const recordingUrl =
         eventPayload.recording_urls?.mp3 ?? eventPayload.recording_urls?.wav;
       if (recordingUrl) {
-        // TODO: mirror the dialer's lib/storage.ts pattern (download from
-        // Telnyx, re-upload to Supabase Storage) instead of storing
-        // Telnyx's own URL directly — see README "Known follow-ups".
-        await attachRecordingUrl(callControlId, recordingUrl);
+        // Downloads from Telnyx and re-uploads to Supabase Storage —
+        // mirrors the dialer's lib/storage.ts pattern exactly, per the
+        // plan, rather than storing Telnyx's own (non-permanent) URL.
+        await saveRecordingForCall(callControlId, recordingUrl);
       }
       break;
     }
