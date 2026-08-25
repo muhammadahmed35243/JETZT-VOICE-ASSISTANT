@@ -43,20 +43,24 @@ function rawDataToString(data: Buffer | ArrayBuffer | Buffer[]): string {
 
 export function handleMediaStreamConnection(ws: MediaSocket) {
   let session: CallSession | null = null;
+  let mediaMessageCount = 0;
 
   ws.on("message", async (raw) => {
     let msg: any;
     try {
       msg = JSON.parse(rawDataToString(raw));
-    } catch {
+    } catch (err) {
+      console.error("[ws] failed to parse incoming message:", err);
       return;
     }
 
     switch (msg.event) {
       case "connected":
+        console.log("[ws] Telnyx sent 'connected'");
         break;
 
       case "start": {
+        console.log(`[ws] Telnyx sent 'start': %j`, msg.start);
         const callControlId: string = msg.start.call_control_id;
         const callerPhone: string = msg.start.from ?? "unknown";
         const streamId: string = msg.start.stream_id ?? msg.stream_sid;
@@ -85,6 +89,10 @@ export function handleMediaStreamConnection(ws: MediaSocket) {
       }
 
       case "media": {
+        mediaMessageCount++;
+        if (mediaMessageCount === 1 || mediaMessageCount % 100 === 0) {
+          console.log(`[ws] 'media' message #${mediaMessageCount}, session=${session ? "present" : "NULL"}`);
+        }
         if (session) {
           session.stt.sendAudio(Buffer.from(msg.media.payload, "base64"));
         }
