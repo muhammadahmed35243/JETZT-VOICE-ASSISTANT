@@ -22,7 +22,11 @@ interface CallSession {
   streamId?: string;
   isFirstTurn: boolean;
   utteranceBuffer: string[];
-  stt: ReturnType<typeof openSttStream>;
+  // Nullable: openSttStream() is async (it awaits the Deepgram connection
+  // actually opening), so there's a real window between the session being
+  // created and the STT connection being ready — 'media' frames arriving
+  // in that window are dropped rather than crashing on a null connection.
+  stt: Awaited<ReturnType<typeof openSttStream>> | null;
   turnInFlight: boolean;
 }
 
@@ -65,26 +69,31 @@ export function handleMediaStreamConnection(ws: MediaSocket) {
         const callerPhone: string = msg.start.from ?? "unknown";
         const streamId: string = msg.start.stream_id ?? msg.stream_sid;
 
-        session = {
+        // session exists (so transcript/turn state is in place) before the
+        // STT connection finishes opening — .stt is filled in right after.
+        const newSession: CallSession = {
           callControlId,
           callerPhone,
           streamId,
           isFirstTurn: true,
           utteranceBuffer: [],
           turnInFlight: false,
-          stt: openSttStream({
-            onFinalTranscript: (text) => {
-              session?.utteranceBuffer.push(text);
-            },
-            onUtteranceEnd: () => {
-              waitUntil(handleUtteranceEnd(session, ws));
-            },
-            onError: (err) => console.error("Deepgram STT error:", err),
-          }),
+          stt: null,
         };
+        session = newSession;
+
+        newSession.stt = await openSttStream({
+          onFinalTranscript: (text) => {
+            newSession.utteranceBuffer.push(text);
+          },
+          onUtteranceEnd: () => {
+            waitUntil(handleUtteranceEnd(session, ws));
+          },
+          onError: (err) => console.error("Deepgram STT error:", err),
+        });
 
         // Agent speaks first — greet before the caller has said anything.
-        await runAgentTurn(session, ws, null);
+        await runAgentTurn(newSession, ws, null);
         break;
       }
 
@@ -93,7 +102,7 @@ export function handleMediaStreamConnection(ws: MediaSocket) {
         if (mediaMessageCount === 1 || mediaMessageCount % 100 === 0) {
           console.log(`[ws] 'media' message #${mediaMessageCount}, session=${session ? "present" : "NULL"}`);
         }
-        if (session) {
+        if (session?.stt) {
           session.stt.sendAudio(Buffer.from(msg.media.payload, "base64"));
         }
         break;
@@ -101,7 +110,7 @@ export function handleMediaStreamConnection(ws: MediaSocket) {
 
       case "stop": {
         if (session) {
-          session.stt.close();
+          session.stt?.close();
           await finalizeCall(session);
         }
         break;
@@ -111,7 +120,7 @@ export function handleMediaStreamConnection(ws: MediaSocket) {
 
   ws.on("close", () => {
     if (session) {
-      session.stt.close();
+      session.stt?.close();
       // Same class of bug just found and fixed in the webhook route: the
       // connection is tearing down right as this fires, so this is the
       // highest-risk fire-and-forget spot in the whole app for getting

@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@deepgram/sdk": "^3.9.0",
+    "@deepgram/sdk": "^5.8.0",
     "@langchain/core": "^0.3.27",
     "@langchain/langgraph": "^0.2.36",
     "@langchain/langgraph-checkpoint-postgres": "^0.0.3",

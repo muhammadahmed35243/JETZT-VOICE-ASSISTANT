@@ -1,6 +1,5 @@
 import { supabase } from "./supabase/client";
 import { attachRecordingUrl } from "./calls/callLog";
-import { config } from "./config";
 
 // Mirrors the dialer's lib/storage.ts pattern exactly (docs/voice-agent-plan.md
 // calls for reusing it, not building a parallel one) — download the
@@ -47,10 +46,13 @@ async function uploadRecordingToStorage(
 }
 
 export async function saveRecordingForCall(callControlId: string, telnyxRecordingUrl: string) {
-  const recordingData = await downloadFile(
-    telnyxRecordingUrl,
-    `Bearer ${config.telnyx.apiKey}`
-  );
+  // No Authorization header here — confirmed directly against a real
+  // failure that Telnyx's recording_urls are already presigned S3 URLs
+  // (X-Amz-Algorithm/Signature in the query string). Adding a Bearer
+  // header on top gets rejected by S3: "Only one auth mechanism allowed."
+  // The dialer's downloadFile() takes an optional authHeader for other
+  // callers that need it; this one just doesn't.
+  const recordingData = await downloadFile(telnyxRecordingUrl);
 
   const now = new Date();
   const dateFolder = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, "0")}`;
