@@ -69,8 +69,6 @@ export function handleMediaStreamConnection(ws: MediaSocket) {
         const callerPhone: string = msg.start.from ?? "unknown";
         const streamId: string = msg.start.stream_id ?? msg.stream_sid;
 
-        // session exists (so transcript/turn state is in place) before the
-        // STT connection finishes opening — .stt is filled in right after.
         const newSession: CallSession = {
           callControlId,
           callerPhone,
@@ -82,7 +80,14 @@ export function handleMediaStreamConnection(ws: MediaSocket) {
         };
         session = newSession;
 
-        newSession.stt = await openSttStream({
+        // STT connecting and the greeting are independent — run them
+        // concurrently, and never let an STT failure block the greeting.
+        // Awaiting openSttStream() before the greeting was the actual bug
+        // just found: it can reject (confirmed — the 1006 issue), and an
+        // unhandled rejection there meant the greeting never ran at all,
+        // not even degraded. STT failing now only means the caller's
+        // speech won't be heard; the agent still greets either way.
+        const sttPromise = openSttStream({
           onFinalTranscript: (text) => {
             newSession.utteranceBuffer.push(text);
           },
@@ -90,10 +95,15 @@ export function handleMediaStreamConnection(ws: MediaSocket) {
             waitUntil(handleUtteranceEnd(session, ws));
           },
           onError: (err) => console.error("Deepgram STT error:", err),
-        });
+        })
+          .then((stt) => {
+            newSession.stt = stt;
+          })
+          .catch((err) => {
+            console.error(`[stt] failed to open connection for ${callControlId}:`, err);
+          });
 
-        // Agent speaks first — greet before the caller has said anything.
-        await runAgentTurn(newSession, ws, null);
+        await Promise.all([sttPromise, runAgentTurn(newSession, ws, null)]);
         break;
       }
 
