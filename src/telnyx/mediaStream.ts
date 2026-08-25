@@ -114,9 +114,21 @@ export function handleMediaStreamConnection(ws: MediaSocket) {
 }
 
 async function handleUtteranceEnd(session: CallSession | null, ws: MediaSocket) {
-  if (!session || session.turnInFlight || session.utteranceBuffer.length === 0) return;
+  if (!session) {
+    console.log("[turn] utterance-end fired with no session — ignoring");
+    return;
+  }
+  if (session.turnInFlight) {
+    console.log(`[turn] utterance-end fired while a turn was already in flight for ${session.callControlId} — ignoring, buffer had: %j`, session.utteranceBuffer);
+    return;
+  }
+  if (session.utteranceBuffer.length === 0) {
+    console.log(`[turn] utterance-end fired with an empty buffer for ${session.callControlId} — nothing to do`);
+    return;
+  }
   const userText = session.utteranceBuffer.join(" ");
   session.utteranceBuffer = [];
+  console.log(`[turn] caller said: ${JSON.stringify(userText)} (call ${session.callControlId})`);
   await runAgentTurn(session, ws, userText);
 }
 
@@ -135,6 +147,7 @@ async function runAgentTurn(
   userText: string | null
 ) {
   session.turnInFlight = true;
+  console.log(`[turn] starting for ${session.callControlId}, isFirstTurn=${session.isFirstTurn}, userText=${JSON.stringify(userText)}`);
   try {
     const responseText = await runTurn({
       callControlId: session.callControlId,
@@ -143,11 +156,14 @@ async function runAgentTurn(
       isFirstTurn: session.isFirstTurn,
     });
     session.isFirstTurn = false;
+    console.log(`[turn] model responded for ${session.callControlId}: ${JSON.stringify(responseText)}`);
 
     if (userText) await appendTranscriptTurn(session.callControlId, "caller", userText);
     await appendTranscriptTurn(session.callControlId, "agent", responseText);
 
+    console.log(`[turn] calling speak() for ${session.callControlId}`);
     await speak(session, ws, responseText);
+    console.log(`[turn] speak() returned for ${session.callControlId}`);
   } catch (err) {
     console.error(`Turn failed for call ${session.callControlId}:`, err);
   } finally {
@@ -162,10 +178,22 @@ function splitSentences(text: string): string[] {
 }
 
 async function speak(session: CallSession, ws: MediaSocket, text: string) {
-  for (const sentence of splitSentences(text)) {
-    for await (const chunk of synthesizeSpeech(sentence)) {
-      if (ws.readyState !== ws.OPEN) return;
-      try {
+  const sentences = splitSentences(text);
+  console.log(`[speak] ${sentences.length} sentence(s) for ${session.callControlId}: %j`, sentences);
+
+  for (const sentence of sentences) {
+    if (ws.readyState !== ws.OPEN) {
+      console.log(`[speak] socket not OPEN before synthesizing "${sentence}" (readyState=${ws.readyState}) — stopping`);
+      return;
+    }
+
+    let chunkCount = 0;
+    try {
+      for await (const chunk of synthesizeSpeech(sentence)) {
+        if (ws.readyState !== ws.OPEN) {
+          console.log(`[speak] socket closed mid-sentence for ${session.callControlId} after ${chunkCount} chunk(s)`);
+          return;
+        }
         ws.send(
           JSON.stringify({
             event: "media",
@@ -173,13 +201,15 @@ async function speak(session: CallSession, ws: MediaSocket, text: string) {
             media: { payload: chunk.toString("base64") },
           })
         );
-      } catch (err) {
-        // Socket already closed (caller hung up mid-response) — stop
-        // synthesizing the rest rather than throwing.
-        console.error(`send() failed for call ${session.callControlId}, stopping:`, err);
-        return;
+        chunkCount++;
       }
+    } catch (err) {
+      // Covers both synthesizeSpeech() (Deepgram fetch) and ws.send()
+      // throwing — either way, stop rather than continue silently.
+      console.error(`[speak] failed on "${sentence}" for ${session.callControlId} after ${chunkCount} chunk(s):`, err);
+      return;
     }
+    console.log(`[speak] sent ${chunkCount} chunk(s) for "${sentence}"`);
   }
 }
 
