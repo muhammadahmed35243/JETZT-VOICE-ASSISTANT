@@ -1,4 +1,5 @@
 import type { WebSocket as MediaSocket } from "ws";
+import { waitUntil } from "@vercel/functions";
 import { openSttStream } from "../stt/deepgramStt";
 import { synthesizeSpeech } from "../tts/deepgramTts";
 import { runTurn } from "../agent/graph";
@@ -72,7 +73,7 @@ export function handleMediaStreamConnection(ws: MediaSocket) {
               session?.utteranceBuffer.push(text);
             },
             onUtteranceEnd: () => {
-              void handleUtteranceEnd(session, ws);
+              waitUntil(handleUtteranceEnd(session, ws));
             },
             onError: (err) => console.error("Deepgram STT error:", err),
           }),
@@ -103,7 +104,11 @@ export function handleMediaStreamConnection(ws: MediaSocket) {
   ws.on("close", () => {
     if (session) {
       session.stt.close();
-      void finalizeCall(session);
+      // Same class of bug just found and fixed in the webhook route: the
+      // connection is tearing down right as this fires, so this is the
+      // highest-risk fire-and-forget spot in the whole app for getting
+      // silently killed without waitUntil().
+      waitUntil(finalizeCall(session));
     }
   });
 }

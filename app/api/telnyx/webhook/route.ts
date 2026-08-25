@@ -1,3 +1,4 @@
+import { waitUntil } from "@vercel/functions";
 import { verifyTelnyxSignature } from "@/telnyx/webhookVerify";
 import {
   answerCall,
@@ -32,9 +33,17 @@ export async function POST(request: Request) {
   const callControlId: string | undefined = eventPayload.call_control_id;
 
   // Handle the event after responding — Telnyx just needs a fast ack.
-  handleEvent(eventType, eventPayload, callControlId).catch((err) => {
-    console.error(`Failed handling ${eventType}:`, err);
-  });
+  // waitUntil() is required here, not optional: on Vercel's serverless
+  // model, returning a Response can freeze/tear down the function's
+  // execution before an un-awaited promise gets to run. Without this, the
+  // outbound call to Telnyx's answer API silently never fired — confirmed
+  // directly against production logs ("External APIs: No outgoing
+  // requests" on every call.initiated invocation).
+  waitUntil(
+    handleEvent(eventType, eventPayload, callControlId).catch((err) => {
+      console.error(`Failed handling ${eventType}:`, err);
+    })
+  );
 
   return new Response(null, { status: 200 });
 }
