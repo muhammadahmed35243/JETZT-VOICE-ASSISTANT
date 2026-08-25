@@ -15,54 +15,49 @@ The admin portal is still new pages inside the *dialer's* app, not here.
 
 ## Status
 
-**Deployed and live** at `https://customized-jetzt-voice-agentvercela.vercel.app`.
-Confirmed against the real deployment, not assumed:
-- `GET /api/health` → `200 {"ok":true}`
-- `POST /api/telnyx/webhook` with a bad signature → `403`, not a `500` —
-  proves `config.ts` loads cleanly with the env vars actually set in
-  Vercel, and signature verification is doing its job.
-- **A real WebSocket handshake against `/api/media-stream` succeeds** —
-  tested with an actual `ws` client, not curl (a plain `GET` there 500s,
-  which is expected for a WebSocket-only endpoint hit without real
-  upgrade headers, not a bug). This was the single biggest unknown in the
-  whole Vercel port — `experimental_upgradeWebSocket` genuinely works in
-  production, and Fluid Compute is correctly enabled.
+**Live and taking real calls.** Deployed at
+`https://customized-jetzt-voice-agentvercela.vercel.app`, `+1 (213)
+758-0964`'s inbound routing points at this service, and a real end-to-end
+call has succeeded — answered, greeted, heard a question, responded.
 
-The Telnyx Call Control connection's `webhook_event_url` now points at
-this real domain (updated via the API). Not yet done: a real phone call
-end-to-end, and the number's inbound routing still hasn't been reassigned
-(deliberately — see below).
+Getting there surfaced four genuine production bugs, each found from real
+call/log evidence rather than guessed:
+1. **Fire-and-forget async work was silently killed.** The webhook
+   responded `200` then handled the event (`answerCall()`, etc.) without
+   awaiting it — Vercel's serverless model can freeze a function's
+   execution the moment a Response is returned, so the outbound call to
+   Telnyx's answer API never actually fired. Fixed with `waitUntil()`
+   from `@vercel/functions`, applied everywhere the same pattern existed
+   (the webhook route, and two spots in the media-stream handler).
+2. **`ws`'s native-addon fallback broke under webpack.** A live call
+   crashed the function 6 seconds in, the moment real audio frames
+   arrived, with `TypeError: b.unmask is not a function` inside `ws`'s
+   frame receiver — Next.js's bundler mangled `ws`'s own conditional
+   require of optional native addons. Fixed via `serverExternalPackages:
+   ["ws"]` in `next.config.js`, which excludes it from the bundle
+   entirely.
+3. **`@vercel/functions` needed `^3.9.5`, not `^1.6.0`** — that version
+   doesn't export `experimental_upgradeWebSocket` at all.
+4. **Every relative/`@/`-aliased import had a `.js` suffix** — correct
+   for the old NodeNext/tsc setup this was ported from, wrong for
+   Next.js's webpack resolution. `tsc --noEmit` didn't catch it, only an
+   actual `next build` did. Stripped from all 20 files.
 
-Also fixed along the way, both confirmed against the installed packages
-rather than guessed:
-- `@vercel/functions` needed to be `^3.9.5`, not the `^1.6.0` first
-  guessed — that version doesn't export `experimental_upgradeWebSocket` at
-  all. Its type definitions also confirm the handler receives a genuine
-  `ws` package `WebSocket`, which resolved the "what shape is this socket"
-  uncertainty flagged earlier — `src/telnyx/mediaStream.ts` uses the real
-  `ws` types now, `readyState`/`OPEN` included, no defensive stand-in.
-- Every relative/`@/`-aliased import across `app/` and `src/` had a `.js`
-  suffix (correct for the old NodeNext/tsc setup, wrong for Next.js's
-  webpack bundler resolution — `tsc --noEmit` didn't catch this, only an
-  actual `next build` did). Stripped from all 20 files.
+Also since the port: response latency was noticeably slow on the first
+working call — `utterance_end_ms` dropped from 1000ms to 600ms, and
+`runTurn()` now streams the model's response and starts speaking each
+sentence as it completes, instead of waiting for the entire reply (see
+"LangGraph turn timing" below).
 
-Done as part of setup already:
-- A new Telnyx Call Control connection exists (id `3033141056032998992`,
-  name "JETZT Voice Agent"), created via the API — separate from the
-  dialer's `Cold Dialer` TeXML connection. Its `webhook_event_url` now
-  points at the real deployment:
-  `https://customized-jetzt-voice-agentvercela.vercel.app/api/telnyx/webhook`.
-- `+12137580964`'s **inbound routing has deliberately not been
-  reassigned** to this new connection yet — do that only once this service
-  is actually deployed and reachable, or incoming calls will go
-  unanswered. The dialer's outbound calls are unaffected either way (see
-  docs/voice-agent-plan.md "Reusing the existing number").
+Other things confirmed along the way, not assumed:
 - Calendly is configured with a Personal Access Token (the right choice
   for a single internal account) and a confirmed event type ("30 Minute
   Meeting").
-- `src/agent/tools/businessData.ts` now reads/writes the dialer's *real*
+- `src/agent/tools/businessData.ts` reads/writes the dialer's *real*
   `leads` table (`phone`, not the `phone_number` column an earlier version
   guessed — fixed after actually reading `D:\Dialer\supabase\schema.sql`).
+- The dialer and this repo share one Supabase database
+  (`bxtmcelkwglvidkcmgkp`) — confirmed via direct queries, not assumed.
 
 ## Why Vercel, and the real tradeoffs that come with it
 
@@ -142,9 +137,6 @@ settings — no CLI flag for it.
 
 ## Known follow-ups
 
-- **Verify against a real call, end to end** — the Media Streaming wire
-  format *and* the Vercel WebSocket API are both unconfirmed without live
-  traffic. This is the single most important next step.
 - **Recording storage** currently saves Telnyx's own recording URL
   directly (`call.recording.saved` handler in
   `app/api/telnyx/webhook/route.ts`). The plan calls for mirroring the
@@ -154,10 +146,14 @@ settings — no CLI flag for it.
 - **`leads.phone` normalization** — not verified how the dialer stores
   phone numbers (with/without `+1`, dashes, etc.). If lookups come back
   empty for callers who should exist, check this first.
-- **LangGraph turn timing is sentence-level, not token-level** — each turn
-  runs to completion (including any tool calls) before TTS starts, then
-  streams sentence-by-sentence. See the comment in
-  `src/telnyx/mediaStream.ts`.
+- ~~LangGraph turn timing is sentence-level, not token-level~~ — **fixed**:
+  `runTurn()` now streams the model's response and speaks each sentence
+  as soon as it's complete, rather than waiting for the whole reply. A
+  turn that triggers a tool call still won't produce audio until that
+  tool call resolves (nothing to stream before the model has something to
+  say), but the common case — a direct text reply — now starts speaking
+  well before the full reply has finished generating. See
+  `src/telnyx/mediaStream.ts` / `src/agent/graph.ts`.
 - **Barge-in is not implemented** — matches the plan's decision to ship v1
   without it.
 - **No durable checkpointing yet** — running on the in-memory fallback
