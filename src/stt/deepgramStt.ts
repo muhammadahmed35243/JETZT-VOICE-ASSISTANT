@@ -59,9 +59,17 @@ export async function openSttStream({
     smart_format: "true",
     interim_results: "true",
     endpointing: 300,
-    // Lowered from 1000ms — real dead air on every turn between the
-    // caller finishing speaking and us starting to process it.
-    utterance_end_ms: 600,
+    // 1000ms is Deepgram's enforced hard minimum for this parameter —
+    // confirmed directly against the API (999 -> 400 Bad Request, 1000 ->
+    // 101 Switching Protocols; anything below 1000 fails the connection
+    // outright, every time). An earlier "latency tune" lowered this to
+    // 600ms to cut dead air after the caller stops talking, which seemed
+    // reasonable but is actually invalid — that single change was the
+    // real cause of every "STT connection dies / no response to the
+    // caller" failure since, not the SDK version or anything else that
+    // got investigated chasing it. Do not lower this again without
+    // re-confirming against the API first.
+    utterance_end_ms: 1000,
     punctuate: "true",
   });
 
