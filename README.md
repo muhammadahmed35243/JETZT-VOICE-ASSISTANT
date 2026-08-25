@@ -15,13 +15,14 @@ The admin portal is still new pages inside the *dialer's* app, not here.
 
 ## Status
 
-**Live and taking real calls.** Deployed at
+**Live and working.** Deployed at
 `https://customized-jetzt-voice-agentvercela.vercel.app`, `+1 (213)
-758-0964`'s inbound routing points at this service, and a real end-to-end
-call has succeeded — answered, greeted, heard a question, responded.
+758-0964`'s inbound routing points at this service, and a full real
+call has succeeded end to end — answered, greeted, heard the caller,
+responded, held a real back-and-forth conversation.
 
-Getting there surfaced four genuine production bugs, each found from real
-call/log evidence rather than guessed:
+Getting there surfaced several genuine production bugs, each found from
+real call/log evidence rather than guessed:
 1. **Fire-and-forget async work was silently killed.** The webhook
    responded `200` then handled the event (`answerCall()`, etc.) without
    awaiting it — Vercel's serverless model can freeze a function's
@@ -42,12 +43,38 @@ call/log evidence rather than guessed:
    for the old NodeNext/tsc setup this was ported from, wrong for
    Next.js's webpack resolution. `tsc --noEmit` didn't catch it, only an
    actual `next build` did. Stripped from all 20 files.
+5. **Recording download sent two auth mechanisms at once.** Telnyx's
+   `recording_urls` are already presigned S3 URLs; adding an
+   `Authorization` header on top got rejected by S3 outright. Fixed by
+   not adding one — the presigned URL is already fully authenticated.
+6. **`utterance_end_ms: 600` was invalid and broke every call, for
+   hours.** A "quick latency tune" lowered this below Deepgram's enforced
+   minimum of 1000ms — confirmed directly by reproducing the exact
+   request outside the app and testing values against the API (999 ->
+   `400 Bad Request`, 1000 -> `101 Switching Protocols`, no exceptions).
+   This single invalid value was the actual cause of every "greeting
+   works, then nothing" failure afterward — not the Deepgram SDK version,
+   not `ws` bundling, not Vercel networking, all of which were real,
+   separately-worth-fixing bugs that got investigated chasing this one.
+   Reverted to `1000`; do not lower it again without re-confirming
+   against the API first.
+7. **`@deepgram/sdk` was two major versions behind** (`3.9.0` vs. `5.8.0`)
+   — upgraded while chasing bug 6. v5 is a full API rewrite
+   (`createClient()`/`.listen.live()`/`LiveTranscriptionEvents` ->
+   `new DeepgramClient()`/`.listen.v1.connect()`/a single discriminated
+   `'message'` event), ported against the installed package's real type
+   definitions rather than guessed.
+8. **STT connecting was blocking the greeting.** A fix for a different
+   bug made `openSttStream()` async and awaited it before the greeting
+   turn — if that connection failed (which it was, from bug 6), the
+   whole handler crashed before the greeting ever ran, so nothing was
+   heard at all, not even degraded. Fixed by running STT connection setup
+   and the greeting concurrently via `Promise.all`, with the STT
+   promise's rejection caught rather than propagating.
 
-Also since the port: response latency was noticeably slow on the first
-working call — `utterance_end_ms` dropped from 1000ms to 600ms, and
-`runTurn()` now streams the model's response and starts speaking each
-sentence as it completes, instead of waiting for the entire reply (see
-"LangGraph turn timing" below).
+Also: `runTurn()` streams the model's response and starts speaking each
+sentence as it completes, instead of waiting for the entire reply, to
+cut response latency (see "LangGraph turn timing" below).
 
 Other things confirmed along the way, not assumed:
 - Calendly is configured with a Personal Access Token (the right choice
