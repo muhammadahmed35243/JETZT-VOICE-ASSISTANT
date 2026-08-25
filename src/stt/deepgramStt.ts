@@ -33,7 +33,11 @@ export function openSttStream({
     smart_format: true,
     interim_results: true,
     endpointing: 300,
-    utterance_end_ms: 1000,
+    // Lowered from 1000ms — this is dead air on every single turn (caller
+    // stops talking, nothing happens for this long before we even start
+    // processing). 600ms trims real latency; risk is cutting off a caller
+    // who pauses mid-thought for longer than that.
+    utterance_end_ms: 600,
     punctuate: true,
   });
 

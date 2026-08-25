@@ -79,16 +79,27 @@ async function getGraph() {
 }
 
 /**
- * Runs one turn of the conversation. `isFirstTurn` controls whether the
- * system prompt gets included — it should only ever be added once per call,
- * at the start; the checkpointer (keyed by call id) carries the rest of the
- * thread's history across subsequent turns automatically.
+ * Runs one turn of the conversation, streaming text deltas out via
+ * onDelta as the model generates them rather than waiting for the whole
+ * reply — verified against a real streamed invocation (streamMode:
+ * "messages" yields [messageChunk, metadata] tuples; metadata.langgraph_node
+ * identifies which node the chunk came from) before building this, not
+ * assumed from docs. Only chunks from the "agent" node carry spoken
+ * content — chunks from a tool-call-deciding pass typically have empty
+ * content, and tool execution itself isn't a message chunk at all, so
+ * both are naturally filtered out here without special-casing them.
+ *
+ * `isFirstTurn` controls whether the system prompt gets included — it
+ * should only ever be added once per call, at the start; the
+ * checkpointer (keyed by call id) carries the rest of the thread's
+ * history across subsequent turns automatically.
  */
 export async function runTurn({
   callControlId,
   callerPhone,
   userText,
   isFirstTurn,
+  onDelta,
 }: {
   callControlId: string;
   callerPhone: string;
@@ -96,6 +107,7 @@ export async function runTurn({
    *  before the caller has said anything. */
   userText: string | null;
   isFirstTurn: boolean;
+  onDelta: (text: string) => void;
 }): Promise<string> {
   const app = await getGraph();
 
@@ -108,13 +120,22 @@ export async function runTurn({
     messages = [new HumanMessage(userText)];
   }
 
-  const result = await app.invoke(
+  const stream = await app.stream(
     { messages },
-    { configurable: { thread_id: callControlId } }
+    { configurable: { thread_id: callControlId }, streamMode: "messages" }
   );
 
-  const last = result.messages[result.messages.length - 1];
-  return typeof last.content === "string" ? last.content : JSON.stringify(last.content);
+  let fullText = "";
+  for await (const item of stream) {
+    const [messageChunk, metadata] = item as [{ content: unknown }, { langgraph_node?: string }];
+    if (metadata.langgraph_node !== "agent") continue;
+    const delta = typeof messageChunk.content === "string" ? messageChunk.content : "";
+    if (!delta) continue;
+    fullText += delta;
+    onDelta(delta);
+  }
+
+  return fullText;
 }
 
 export async function getFullTranscript(callControlId: string) {

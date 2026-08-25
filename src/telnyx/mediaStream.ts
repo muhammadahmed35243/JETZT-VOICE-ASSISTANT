@@ -141,13 +141,18 @@ async function handleUtteranceEnd(session: CallSession | null, ws: MediaSocket) 
 }
 
 /**
- * Runs one LangGraph turn and speaks the result. v1 scoping note: this
- * awaits the full turn (including any tool calls) before synthesizing any
- * audio, then streams TTS sentence-by-sentence rather than token-by-token —
- * sentence-level streaming, not the tighter token-level streaming the plan
- * called out as the ideal. Time-to-first-audio on a turn that triggers a
- * slow tool call (e.g. Calendly) will be noticeably slower than one that
- * doesn't. Worth revisiting once this is running against real calls.
+ * Runs one LangGraph turn, speaking sentences as they stream in rather
+ * than waiting for the full reply — this is what actually cuts
+ * time-to-first-audio, not just chunking a finished reply into sentences
+ * afterward. runTurn() streams text deltas via onDelta; as soon as a
+ * complete sentence appears in the accumulated buffer, it's handed to
+ * speakSentence(). Synthesis+send for each sentence is chained onto
+ * speakQueue rather than fired concurrently — sentence order on the wire
+ * has to match spoken order, and this is the simple way to guarantee that
+ * without a separate reordering buffer. It does mean sentence 2 doesn't
+ * start synthesizing until sentence 1's audio has fully sent, which is a
+ * real (smaller) latency cost against true parallel synthesis — worth
+ * revisiting if time-to-first-audio is still not good enough after this.
  */
 async function runAgentTurn(
   session: CallSession,
@@ -156,22 +161,42 @@ async function runAgentTurn(
 ) {
   session.turnInFlight = true;
   console.log(`[turn] starting for ${session.callControlId}, isFirstTurn=${session.isFirstTurn}, userText=${JSON.stringify(userText)}`);
+
+  let sentenceBuffer = "";
+  let speakQueue: Promise<void> = Promise.resolve();
+  let sentenceCount = 0;
+
+  const enqueueSentence = (sentence: string) => {
+    sentenceCount++;
+    console.log(`[turn] sentence ${sentenceCount} ready for ${session.callControlId}: ${JSON.stringify(sentence)}`);
+    speakQueue = speakQueue.then(() => speakSentence(session, ws, sentence));
+  };
+
   try {
     const responseText = await runTurn({
       callControlId: session.callControlId,
       callerPhone: session.callerPhone,
       userText,
       isFirstTurn: session.isFirstTurn,
+      onDelta: (delta) => {
+        sentenceBuffer += delta;
+        const { sentences, remainder } = extractReadySentences(sentenceBuffer);
+        sentenceBuffer = remainder;
+        for (const sentence of sentences) enqueueSentence(sentence);
+      },
     });
     session.isFirstTurn = false;
-    console.log(`[turn] model responded for ${session.callControlId}: ${JSON.stringify(responseText)}`);
+    console.log(`[turn] model finished responding for ${session.callControlId}: ${JSON.stringify(responseText)}`);
+
+    // Trailing text with no terminal punctuation never got picked up by
+    // extractReadySentences above — flush it as the final sentence.
+    if (sentenceBuffer.trim()) enqueueSentence(sentenceBuffer.trim());
 
     if (userText) await appendTranscriptTurn(session.callControlId, "caller", userText);
     await appendTranscriptTurn(session.callControlId, "agent", responseText);
 
-    console.log(`[turn] calling speak() for ${session.callControlId}`);
-    await speak(session, ws, responseText);
-    console.log(`[turn] speak() returned for ${session.callControlId}`);
+    await speakQueue;
+    console.log(`[turn] all ${sentenceCount} sentence(s) spoken for ${session.callControlId}`);
   } catch (err) {
     console.error(`Turn failed for call ${session.callControlId}:`, err);
   } finally {
@@ -179,46 +204,49 @@ async function runAgentTurn(
   }
 }
 
-function splitSentences(text: string): string[] {
-  return (
-    text.match(/[^.!?]+[.!?]*/g)?.map((s) => s.trim()).filter(Boolean) ?? [text]
-  );
+/** Pulls every complete sentence out of a growing buffer, leaving any
+ *  trailing partial sentence behind for the next call. */
+function extractReadySentences(buffer: string): { sentences: string[]; remainder: string } {
+  const sentences: string[] = [];
+  let remainder = buffer;
+  let match: RegExpMatchArray | null;
+  while ((match = remainder.match(/^([^.!?]*[.!?]+)\s*/))) {
+    const sentence = match[1].trim();
+    if (sentence) sentences.push(sentence);
+    remainder = remainder.slice(match[0].length);
+  }
+  return { sentences, remainder };
 }
 
-async function speak(session: CallSession, ws: MediaSocket, text: string) {
-  const sentences = splitSentences(text);
-  console.log(`[speak] ${sentences.length} sentence(s) for ${session.callControlId}: %j`, sentences);
-
-  for (const sentence of sentences) {
-    if (ws.readyState !== ws.OPEN) {
-      console.log(`[speak] socket not OPEN before synthesizing "${sentence}" (readyState=${ws.readyState}) — stopping`);
-      return;
-    }
-
-    let chunkCount = 0;
-    try {
-      for await (const chunk of synthesizeSpeech(sentence)) {
-        if (ws.readyState !== ws.OPEN) {
-          console.log(`[speak] socket closed mid-sentence for ${session.callControlId} after ${chunkCount} chunk(s)`);
-          return;
-        }
-        ws.send(
-          JSON.stringify({
-            event: "media",
-            stream_id: session.streamId,
-            media: { payload: chunk.toString("base64") },
-          })
-        );
-        chunkCount++;
-      }
-    } catch (err) {
-      // Covers both synthesizeSpeech() (Deepgram fetch) and ws.send()
-      // throwing — either way, stop rather than continue silently.
-      console.error(`[speak] failed on "${sentence}" for ${session.callControlId} after ${chunkCount} chunk(s):`, err);
-      return;
-    }
-    console.log(`[speak] sent ${chunkCount} chunk(s) for "${sentence}"`);
+async function speakSentence(session: CallSession, ws: MediaSocket, sentence: string) {
+  if (ws.readyState !== ws.OPEN) {
+    console.log(`[speak] socket not OPEN before synthesizing "${sentence}" (readyState=${ws.readyState}) — stopping`);
+    return;
   }
+
+  let chunkCount = 0;
+  try {
+    for await (const chunk of synthesizeSpeech(sentence)) {
+      if (ws.readyState !== ws.OPEN) {
+        console.log(`[speak] socket closed mid-sentence for ${session.callControlId} after ${chunkCount} chunk(s)`);
+        return;
+      }
+      ws.send(
+        JSON.stringify({
+          event: "media",
+          stream_id: session.streamId,
+          media: { payload: chunk.toString("base64") },
+        })
+      );
+      chunkCount++;
+    }
+  } catch (err) {
+    // Covers both synthesizeSpeech() (Deepgram fetch) and ws.send()
+    // throwing — either way, stop rather than continue silently.
+    console.error(`[speak] failed on "${sentence}" for ${session.callControlId} after ${chunkCount} chunk(s):`, err);
+    return;
+  }
+  console.log(`[speak] sent ${chunkCount} chunk(s) for "${sentence}"`);
 }
 
 async function finalizeCall(session: CallSession) {
