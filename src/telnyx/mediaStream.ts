@@ -48,8 +48,14 @@ function rawDataToString(data: Buffer | ArrayBuffer | Buffer[]): string {
 export function handleMediaStreamConnection(ws: MediaSocket) {
   let session: CallSession | null = null;
   let mediaMessageCount = 0;
+  let rawMessageCount = 0;
 
   ws.on("message", async (raw) => {
+    rawMessageCount++;
+    if (rawMessageCount === 1 || rawMessageCount % 100 === 0) {
+      console.log(`[ws] raw 'message' event #${rawMessageCount} received (before parsing)`);
+    }
+
     let msg: any;
     try {
       msg = JSON.parse(rawDataToString(raw));
@@ -125,6 +131,17 @@ export function handleMediaStreamConnection(ws: MediaSocket) {
         }
         break;
       }
+
+      default:
+        // No default case existed before this — an unrecognized event.event
+        // value would silently vanish with zero logging, which is
+        // indistinguishable from audio never arriving at all. A real call
+        // billed 32s of inbound media streaming on Telnyx's side while we
+        // logged not one 'media' message — this is here to find out
+        // whether that's because the event name differs from what we
+        // expect, rather than guessing further.
+        console.log(`[ws] unhandled event type ${JSON.stringify(msg.event)}: %j`, msg);
+        break;
     }
   });
 
