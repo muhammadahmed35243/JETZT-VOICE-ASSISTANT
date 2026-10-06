@@ -72,6 +72,76 @@ confirmed. Things checked today:
   after goodbye and answered line noise ("Quarterback.").
 - The post-call extractor no longer turns "the agent didn't know" into KB facts.
 
+## Booking: Calendly replaced by Google Calendar
+
+Booking now goes on the company Google Calendar. It uses the same OAuth app
+as the JETZT portal (`calendar.events` scope).
+
+- **Availability** is business hours minus events already on the calendar,
+  so portal team meetings block slots too. The hours come from
+  `BOOKING_TIMEZONE`, `BOOKING_HOURS`, `BOOKING_DAYS`,
+  `BOOKING_SLOT_MINUTES` and `BOOKING_MIN_NOTICE_MINUTES`. The defaults are
+  Mon–Fri, 9–5 Pacific, 30-minute slots, 2 hours' notice.
+- **The agent confirms the caller's timezone** (guessed from the area code)
+  and offers two or three slots in it.
+- **Booking** re-checks that the slot is still free, then creates the event
+  with a Google Meet link and emails the invite to the caller.
+- **Rescheduling moves the event in place**, so the Meet link stays the same.
+  Cancelling deletes the event.
+- Bookings are still tracked in the `calendly_bookings` table, so no migration
+  is needed. `event_uuid` now holds the Google event id.
+- **Until the env vars are set, booking is off.** The agent says the team will
+  reach out and takes a message instead.
+
+Setup: add these in Vercel (and in `.env.local` to test locally):
+- `GOOGLE_CALENDAR_CLIENT_ID` and `GOOGLE_CALENDAR_CLIENT_SECRET`: the same
+  values as the portal's.
+- `GOOGLE_CALENDAR_REFRESH_TOKEN`: a refresh token for the company Google
+  account.
+  - **Option A (easiest):** decrypt the token the portal already stores in its
+    `integration_credentials` table.
+  - **Option B:** run an OAuth consent for the account with the portal's
+    client.
+  - Either way, clicking "Disconnect" in the portal revokes the grant for the
+    voice agent too.
+
+## Testing every step: `scripts/simulate-call.ts`
+
+    npx tsx scripts/simulate-call.ts                 # all scenarios, in-process
+    npx tsx scripts/simulate-call.ts overlap,silence --remote https://<deployment>
+
+The simulator plays the Telnyx side of a call with a synthesized caller voice:
+real-time 20ms mulaw frames, through real STT, LLM and TTS. For each step it
+prints:
+- what the agent heard
+- what the agent said (transcribed from its audio, so you get what the caller
+  actually hears)
+- the latency from the end of the caller's speech to the first agent audio
+
+A reviewer model then grades each call and suggests one fix.
+
+- **Scripted edge cases:**
+  - `overlap`: the caller talks over the greeting
+  - `mid-pause`: a pause mid-sentence
+  - `silence`: the caller says nothing
+  - `garbled`: line noise
+- **LLM-played callers** that react to whatever the agent actually said:
+  - `prospect-books-call`
+  - `message-hard-email`
+  - `skeptical-shopper`
+  - `cancel-meeting`
+
+Use `--remote` for timing. This machine's own network adds seconds per hop.
+
+Simulated calls (`sim-` ids) skip every real side effect on the server (see
+`src/calls/simulation.ts`). They're only accepted with the media-stream
+token: a hash of `TELNYX_API_KEY`, so local and production keys must match.
+
+**Media-stream token.** The media-stream endpoint used to accept anyone.
+Telnyx is now given `?token=…` in the stream URL. For real calls a missing
+token is only logged for now. Once one real call shows no "has no valid
+token" warning in `vercel logs`, make it reject the connection.
+
 ## Still needed (not code)
 
 1. **Fill in `core_instructions`** in the admin portal: what JETZT sells, who

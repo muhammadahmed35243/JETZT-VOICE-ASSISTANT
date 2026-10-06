@@ -109,15 +109,15 @@ export async function runTurn({
   userText,
   opening,
   onDelta,
-  onSilentToolCall,
+  onToolCall,
 }: {
   callControlId: string;
   userText: string;
   opening?: { systemPrompt: string; greeting: string };
   onDelta: (text: string) => void;
-  /** The model started a tool call without saying anything first — the
-   *  caller is about to sit through the tool's latency in silence. */
-  onSilentToolCall?: (toolName: string) => void;
+  /** The model started a tool call — the caller is about to sit through
+   *  the tool's latency. `saidSomething` is whether it spoke first. */
+  onToolCall?: (toolName: string, saidSomething: boolean) => void;
 }): Promise<string> {
   const app = await getGraph();
 
@@ -154,9 +154,9 @@ export async function runTurn({
     }
 
     const toolName = messageChunk.tool_call_chunks?.find((c) => c.name)?.name;
-    if (toolName && !messageHasText && !toolCallReported) {
+    if (toolName && !toolCallReported) {
       toolCallReported = true;
-      onSilentToolCall?.(toolName);
+      onToolCall?.(toolName, messageHasText);
     }
 
     const delta = typeof messageChunk.content === "string" ? messageChunk.content : "";

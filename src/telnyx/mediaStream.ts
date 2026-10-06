@@ -24,6 +24,21 @@ export type { MediaSocket };
 // before it checks in. Measured from when the audio finishes *playing*,
 // not from when it finished sending (see playbackEndsAt).
 const SILENCE_REPROMPT_MS = 8000;
+// Simulated callers (scripts/simulate-call.ts) are slower to answer than
+// people — each reply goes through transcription, a model, and TTS on the
+// test machine — so they get more room before "are you still there?".
+const SIMULATED_SILENCE_REPROMPT_MS = 20000;
+
+// "So I was wondering," + a breath is not the end of a turn, but endpointing
+// can't tell. When the words so far look unfinished, hold this much longer
+// for the caller to carry on; any new speech cancels the hold.
+const INCOMPLETE_THOUGHT_HOLD_MS = 1500;
+const TRAILING_CONTINUATION =
+  /(,|\b(and|but|or|so|because|cause|if|that|the|a|an|to|of|for|with|my|our|is|are|was|um|uh|like|wondering|thinking|wanted to|was going to))[.?!]?$/i;
+
+function looksIncomplete(text: string): boolean {
+  return TRAILING_CONTINUATION.test(text.trim());
+}
 const SILENCE_PROMPTS = [
   "Are you still there?",
   "I'll let you go for now. Feel free to call back anytime. Bye!",
@@ -33,6 +48,10 @@ const TURN_FAILED_REPLY = "Sorry, I didn't catch that. Could you say it again?";
 // anything, so the caller isn't left in silence while it runs. Rotated so
 // it doesn't sound canned on a call with several lookups.
 const TOOL_FILLERS = ["One sec.", "Let me check.", "Just a moment."];
+// A first sentence this short ("Sorry.", "Got it.") is held and spoken with
+// the next one. Sent alone, it played and then left a gap while the next
+// sentence was still being generated — "Sorry. ... I didn't catch that."
+const MIN_SPOKEN_CHUNK_CHARS = 16;
 
 // mulaw at 8kHz is one byte per sample: 8 bytes per millisecond of audio.
 const MULAW_BYTES_PER_MS = 8;
@@ -62,8 +81,12 @@ interface CallSession {
   // it". This tracks when the caller actually finishes hearing it.
   playbackEndsAt: number;
   silenceTimer?: ReturnType<typeof setTimeout>;
+  turnEndHold?: ReturnType<typeof setTimeout>;
   silencePromptsGiven: number;
   fillersGiven: number;
+  // Per-turn latency, logged as [timing] — the production view of how
+  // long the caller waited, without any client-side network in it.
+  turnTiming?: { start: number; firstToken?: number; firstAudio?: number };
   ended: boolean;
   finalized: boolean;
   // Transcript appends are read-modify-write on one jsonb column — chained
@@ -182,9 +205,15 @@ export function handleMediaStreamConnection(ws: MediaSocket, { authenticated }: 
   });
 }
 
+function clearTurnEndHold(session: CallSession) {
+  if (session.turnEndHold) clearTimeout(session.turnEndHold);
+  session.turnEndHold = undefined;
+}
+
 function endSession(session: CallSession) {
   session.ended = true;
   clearSilenceTimer(session);
+  clearTurnEndHold(session);
   session.stt?.close();
 }
 
@@ -200,9 +229,18 @@ async function connectStt(session: CallSession, ws: MediaSocket) {
         },
         onCallerSpeech: () => {
           session.silencePromptsGiven = 0;
+          // Still talking — whatever looked like the end of their turn wasn't.
+          clearTurnEndHold(session);
           if (!session.turnInFlight) armSilenceTimer(session, ws);
         },
         onUtteranceEnd: () => {
+          clearTurnEndHold(session);
+          const soFar = session.utteranceBuffer.join(" ");
+          if (soFar && looksIncomplete(soFar)) {
+            console.log(`[turn] holding — ${JSON.stringify(soFar)} looks unfinished`);
+            session.turnEndHold = setTimeout(() => waitUntil(handleTurnEnd(session, ws)), INCOMPLETE_THOUGHT_HOLD_MS);
+            return;
+          }
           waitUntil(handleTurnEnd(session, ws));
         },
         onError: (err) => console.error("Deepgram STT error:", err),
@@ -256,12 +294,14 @@ async function handleTurnEnd(session: CallSession, ws: MediaSocket) {
  */
 async function runAgentTurn(session: CallSession, ws: MediaSocket, userText: string) {
   session.turnInFlight = true;
+  session.turnTiming = { start: Date.now() };
 
   let sentenceBuffer = "";
   let speakQueue: Promise<void> = Promise.resolve();
   let sentenceCount = 0;
   let goodbye: string | undefined;
 
+  let held = "";
   const enqueueSentence = (sentence: string) => {
     sentenceCount++;
     console.log(`[turn] sentence ${sentenceCount} ready for ${session.callControlId}: ${JSON.stringify(sentence)}`);
@@ -280,13 +320,27 @@ async function runAgentTurn(session: CallSession, ws: MediaSocket, userText: str
       userText,
       opening,
       onDelta: (delta) => {
+        session.turnTiming!.firstToken ??= Date.now();
         sentenceBuffer += delta;
         const { sentences, remainder } = extractReadySentences(sentenceBuffer);
         sentenceBuffer = remainder;
-        for (const sentence of sentences) enqueueSentence(sentence);
+        for (const sentence of sentences) {
+          const chunk = held ? `${held} ${sentence}` : sentence;
+          if (chunk.length < MIN_SPOKEN_CHUNK_CHARS) {
+            held = chunk;
+            continue;
+          }
+          held = "";
+          enqueueSentence(chunk);
+        }
       },
-      onSilentToolCall: (toolName) => {
-        if (toolName === END_CALL_TOOL_NAME) return; // carries its own goodbye
+      onToolCall: (toolName, saidSomething) => {
+        // Don't sit on held text through the tool's latency.
+        if (held) {
+          enqueueSentence(held);
+          held = "";
+        }
+        if (saidSomething || toolName === END_CALL_TOOL_NAME) return; // end_call carries its own goodbye
         const filler = TOOL_FILLERS[session.fillersGiven++ % TOOL_FILLERS.length];
         speakQueue = speakQueue.then(() => speakFixed(session, ws, filler));
       },
@@ -295,7 +349,8 @@ async function runAgentTurn(session: CallSession, ws: MediaSocket, userText: str
 
     // Trailing text with no terminal punctuation never got picked up by
     // extractReadySentences above — flush it as the final sentence.
-    if (sentenceBuffer.trim()) enqueueSentence(sentenceBuffer.trim());
+    const rest = [held, sentenceBuffer.trim()].filter(Boolean).join(" ");
+    if (rest) enqueueSentence(rest);
 
     goodbye = consumePendingGoodbye(session.callControlId);
     if (goodbye) enqueueSentence(goodbye);
@@ -312,6 +367,14 @@ async function runAgentTurn(session: CallSession, ws: MediaSocket, userText: str
     if (sentenceCount === 0) await speakFixed(session, ws, TURN_FAILED_REPLY);
   } finally {
     session.turnInFlight = false;
+    const t = session.turnTiming;
+    if (t) {
+      const ms = (at?: number) => (at ? `${at - t.start}ms` : "-");
+      console.log(
+        `[timing] ${session.callControlId}: first token ${ms(t.firstToken)}, first audio ${ms(t.firstAudio)}, done ${ms(Date.now())}`
+      );
+    }
+    session.turnTiming = undefined;
   }
 
   if (goodbye) await hangUpAfterPlayback(session);
@@ -367,6 +430,7 @@ async function sendSpeech(
         console.log(`[speak] socket closed for ${session.callControlId} after ${chunkCount} chunk(s)`);
         return false;
       }
+      if (session.turnTiming) session.turnTiming.firstAudio ??= Date.now();
       ws.send(
         JSON.stringify({
           event: "media",
@@ -390,7 +454,8 @@ async function sendSpeech(
 function armSilenceTimer(session: CallSession, ws: MediaSocket) {
   clearSilenceTimer(session);
   if (session.ended || session.silencePromptsGiven >= SILENCE_PROMPTS.length) return;
-  const delay = Math.max(0, session.playbackEndsAt - Date.now()) + SILENCE_REPROMPT_MS;
+  const silenceMs = isSimulatedCall(session.callControlId) ? SIMULATED_SILENCE_REPROMPT_MS : SILENCE_REPROMPT_MS;
+  const delay = Math.max(0, session.playbackEndsAt - Date.now()) + silenceMs;
   session.silenceTimer = setTimeout(() => waitUntil(onCallerSilent(session, ws)), delay);
 }
 

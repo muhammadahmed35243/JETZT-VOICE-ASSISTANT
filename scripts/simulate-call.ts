@@ -256,12 +256,19 @@ async function runCall(name: string, script: Step[] | Persona): Promise<CallResu
     result.failures.push(why);
   };
 
-  let link: AgentLink;
+  let link: AgentLink | undefined;
   if (REMOTE) {
-    try {
-      link = await remoteLink();
-    } catch (err) {
-      fail(`couldn't connect: ${(err as Error).message}`);
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= 5 && !link!; attempt++) {
+      try {
+        link = await remoteLink();
+      } catch (err) {
+        lastErr = err;
+        await sleep(3000); // flaky local DNS/network — not the server
+      }
+    }
+    if (!link!) {
+      fail(`couldn't connect: ${(lastErr as Error).message}`);
       return result;
     }
   } else {
