@@ -1,11 +1,10 @@
-import { StateGraph, START, MessagesAnnotation, MemorySaver } from "@langchain/langgraph";
+import { StateGraph, START, END, MessagesAnnotation, MemorySaver } from "@langchain/langgraph";
 import { ToolNode, toolsCondition } from "@langchain/langgraph/prebuilt";
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import { ChatOpenAI } from "@langchain/openai";
-import { HumanMessage, SystemMessage } from "@langchain/core/messages";
+import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
 
 import { config } from "../config";
-import { buildSystemPrompt } from "./systemPrompt";
 import { kbLookupTool } from "./tools/kbLookup";
 import { lookupLeadTool, updateLeadNoteTool } from "./tools/businessData";
 import {
@@ -13,8 +12,9 @@ import {
   bookMeetingTool,
   cancelMeetingTool,
   rescheduleMeetingTool,
-} from "./tools/calendly";
+} from "./tools/calendar";
 import { takeMessageTool } from "./tools/takeMessage";
+import { endCallTool, END_CALL_TOOL_NAME } from "./tools/endCall";
 
 const tools = [
   kbLookupTool,
@@ -25,12 +25,16 @@ const tools = [
   cancelMeetingTool,
   rescheduleMeetingTool,
   takeMessageTool,
+  endCallTool,
 ];
 
 const model = new ChatOpenAI({
   model: "gpt-4o",
   apiKey: config.openai.apiKey,
   temperature: 0.4,
+  // Hard ceiling, not the target — the system prompt asks for one or two
+  // sentences. This just stops a runaway monologue on a phone line.
+  maxTokens: 250,
 }).bindTools(tools);
 
 async function agentNode(state: typeof MessagesAnnotation.State) {
@@ -45,7 +49,12 @@ const graphBuilder = new StateGraph(MessagesAnnotation)
   .addNode("tools", toolNode)
   .addEdge(START, "agent")
   .addConditionalEdges("agent", toolsCondition)
-  .addEdge("tools", "agent");
+  // end_call carries its own goodbye (spoken by the media stream handler),
+  // so there's nothing left for the model to say — skip the extra pass.
+  .addConditionalEdges("tools", (state) => {
+    const last = state.messages[state.messages.length - 1];
+    return last?.name === END_CALL_TOOL_NAME ? END : "agent";
+  });
 
 let compiledGraph: Awaited<ReturnType<typeof compile>> | null = null;
 
@@ -89,36 +98,32 @@ async function getGraph() {
  * content, and tool execution itself isn't a message chunk at all, so
  * both are naturally filtered out here without special-casing them.
  *
- * `isFirstTurn` controls whether the system prompt gets included — it
- * should only ever be added once per call, at the start; the
- * checkpointer (keyed by call id) carries the rest of the thread's
- * history across subsequent turns automatically.
+ * `opening` is only passed on the caller's first turn: the system prompt
+ * plus the greeting that was already spoken (the greeting is played
+ * straight from TTS without a model round-trip, so the thread has to be
+ * told it happened). The checkpointer (keyed by call id) carries the rest
+ * of the thread's history across subsequent turns automatically.
  */
 export async function runTurn({
   callControlId,
-  callerPhone,
   userText,
-  isFirstTurn,
+  opening,
   onDelta,
+  onSilentToolCall,
 }: {
   callControlId: string;
-  callerPhone: string;
-  /** null only valid on the first turn — lets the agent open with a greeting
-   *  before the caller has said anything. */
-  userText: string | null;
-  isFirstTurn: boolean;
+  userText: string;
+  opening?: { systemPrompt: string; greeting: string };
   onDelta: (text: string) => void;
+  /** The model started a tool call without saying anything first — the
+   *  caller is about to sit through the tool's latency in silence. */
+  onSilentToolCall?: (toolName: string) => void;
 }): Promise<string> {
   const app = await getGraph();
 
-  let messages;
-  if (isFirstTurn) {
-    const system = new SystemMessage(await buildSystemPrompt(callerPhone, callControlId));
-    messages = userText ? [system, new HumanMessage(userText)] : [system];
-  } else {
-    if (!userText) throw new Error("userText is required for non-first turns");
-    messages = [new HumanMessage(userText)];
-  }
+  const messages = opening
+    ? [new SystemMessage(opening.systemPrompt), new AIMessage(opening.greeting), new HumanMessage(userText)]
+    : [new HumanMessage(userText)];
 
   const stream = await app.stream(
     { messages },
@@ -126,11 +131,42 @@ export async function runTurn({
   );
 
   let fullText = "";
+  let currentMessageId: string | undefined;
+  let messageHasText = false;
+  let toolCallReported = false;
+  let needsSeparator = false;
   for await (const item of stream) {
-    const [messageChunk, metadata] = item as [{ content: unknown }, { langgraph_node?: string }];
+    const [messageChunk, metadata] = item as [
+      { content: unknown; id?: string; tool_call_chunks?: Array<{ name?: string }> },
+      { langgraph_node?: string },
+    ];
     if (metadata.langgraph_node !== "agent") continue;
+
+    if (messageChunk.id !== currentMessageId) {
+      currentMessageId = messageChunk.id;
+      messageHasText = false;
+      toolCallReported = false;
+      // A turn with a tool call produces two agent messages ("Let me
+      // check." -> tool -> "Okay, so..."). Without a separator they ran
+      // together as "check.Okay", which also kept the sentence splitter
+      // from seeing a boundary there.
+      needsSeparator = fullText.length > 0;
+    }
+
+    const toolName = messageChunk.tool_call_chunks?.find((c) => c.name)?.name;
+    if (toolName && !messageHasText && !toolCallReported) {
+      toolCallReported = true;
+      onSilentToolCall?.(toolName);
+    }
+
     const delta = typeof messageChunk.content === "string" ? messageChunk.content : "";
     if (!delta) continue;
+    if (needsSeparator) {
+      fullText += " ";
+      onDelta(" ");
+      needsSeparator = false;
+    }
+    messageHasText = true;
     fullText += delta;
     onDelta(delta);
   }

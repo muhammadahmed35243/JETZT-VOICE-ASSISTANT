@@ -2,7 +2,7 @@
  * Shared "confirm-by-spelling" pattern — see docs/voice-agent-plan.md
  * Tools section. This isn't a callable tool itself; it's a system-prompt
  * fragment that gets appended whenever a tool in play can capture an email
- * (Calendly booking, fallback message), plus a light validator the tools
+ * (meeting booking, fallback message), plus a light validator the tools
  * use as a technical backstop. The actual "read it back and confirm"
  * behavior is the model following this instruction conversationally, not
  * code enforcing it turn-by-turn.

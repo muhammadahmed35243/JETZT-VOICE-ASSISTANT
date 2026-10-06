@@ -8,13 +8,14 @@ import {
 import { createCallLog } from "@/calls/callLog";
 import { saveRecordingForCall } from "@/storage";
 import { config } from "@/config";
+import { mediaStreamToken } from "@/calls/simulation";
 
 // Explicit Node.js runtime — this route uses Buffer/tweetnacl and talks to
 // Supabase/Telnyx with the service-role key, none of which belong on the
 // Edge runtime.
 export const runtime = "nodejs";
 
-const streamWsUrl = `${config.publicBaseUrl.replace(/^http/, "ws")}/api/media-stream`;
+const streamWsUrl = `${config.publicBaseUrl.replace(/^http/, "ws")}/api/media-stream?token=${mediaStreamToken()}`;
 
 export async function POST(request: Request) {
   const signature = request.headers.get("telnyx-signature-ed25519") ?? undefined;

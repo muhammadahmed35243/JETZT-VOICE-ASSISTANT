@@ -1,5 +1,6 @@
 import { experimental_upgradeWebSocket } from "@vercel/functions";
 import { handleMediaStreamConnection } from "@/telnyx/mediaStream";
+import { mediaStreamToken } from "@/calls/simulation";
 
 // Node.js runtime — this handler talks to Deepgram, OpenAI, and Supabase
 // with server-only credentials.
@@ -21,8 +22,9 @@ export const maxDuration = 300;
  * WebSocket, so handleMediaStreamConnection can be passed straight
  * through with no adapter/cast needed.
  */
-export async function GET() {
+export async function GET(request: Request) {
+  const authenticated = new URL(request.url).searchParams.get("token") === mediaStreamToken();
   return experimental_upgradeWebSocket((ws) => {
-    handleMediaStreamConnection(ws);
+    handleMediaStreamConnection(ws, { authenticated });
   });
 }

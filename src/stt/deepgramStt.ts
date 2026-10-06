@@ -44,10 +44,18 @@ function describeEvent(event: any): Record<string, unknown> {
  */
 export async function openSttStream({
   onFinalTranscript,
+  onCallerSpeech,
   onUtteranceEnd,
   onError,
 }: {
   onFinalTranscript: (text: string) => void;
+  /** Any non-empty transcript, interim or final — "the caller is talking
+   *  right now". Used to cancel the silence re-prompt timer. */
+  onCallerSpeech: () => void;
+  /** Fired on either turn-end signal: `speech_final` (endpointing silence,
+   *  the fast path) or UtteranceEnd (word-gap fallback for noisy lines
+   *  where endpointing never triggers). Can fire twice for one utterance —
+   *  the caller handles that by ignoring it when the buffer is empty. */
   onUtteranceEnd: () => void;
   onError: (err: unknown) => void;
 }): Promise<DeepgramStream> {
@@ -58,7 +66,14 @@ export async function openSttStream({
     channels: 1,
     smart_format: "true",
     interim_results: "true",
-    endpointing: 300,
+    // Turn-taking: speech_final fires after this much silence, and is the
+    // primary "caller is done" signal (see onUtteranceEnd). 300ms cut people
+    // off mid-thought ("my email is... uh"); 500ms is still ~500ms faster
+    // than waiting on UtteranceEnd's 1000ms floor.
+    endpointing: 500,
+    // Nova-3 keyterm prompting — without it "JETZT" was transcribed as
+    // "Jess" on a real call.
+    keyterm: "JETZT",
     // 1000ms is Deepgram's enforced hard minimum for this parameter —
     // confirmed directly against the API (999 -> 400 Bad Request, 1000 ->
     // 101 Switching Protocols; anything below 1000 fails the connection
@@ -74,7 +89,7 @@ export async function openSttStream({
   });
 
   let audioChunksSent = 0;
-  let closed = false;
+  let sendFailures = 0;
 
   connection.on("open", () => {
     console.log("[stt] Deepgram connection opened");
@@ -85,8 +100,12 @@ export async function openSttStream({
       const alt = data.channel?.alternatives?.[0];
       const text = alt?.transcript?.trim();
       console.log(`[stt] transcript event: is_final=${data.is_final} text=${JSON.stringify(text)}`);
+      if (text) onCallerSpeech();
       if (text && data.is_final) {
         onFinalTranscript(text);
+      }
+      if (data.speech_final) {
+        onUtteranceEnd();
       }
     } else if (data.type === "UtteranceEnd") {
       console.log("[stt] UtteranceEnd event fired");
@@ -95,7 +114,6 @@ export async function openSttStream({
   });
 
   connection.on("close", (event) => {
-    closed = true;
     console.log(
       `[stt] Deepgram connection closed after ${audioChunksSent} audio chunk(s) sent:`,
       describeEvent(event)
@@ -103,7 +121,6 @@ export async function openSttStream({
   });
 
   connection.on("error", (err) => {
-    closed = true;
     console.error("[stt] Deepgram error:", describeEvent(err));
     onError(err);
   });
@@ -113,19 +130,32 @@ export async function openSttStream({
 
   return {
     sendAudio(chunk: Buffer) {
-      if (closed) {
-        // Connection already died — without this guard, every subsequent
-        // 'media' frame silently called send() on a dead connection for
-        // the rest of the call, with nothing in the logs to indicate
-        // anything was wrong after the first error.
+      // v5's socket is a ReconnectingWebSocket: a dropped connection
+      // reconnects on its own, so "closed" isn't permanent — a sticky
+      // closed flag here used to leave the agent deaf for the rest of the
+      // call after one blip. Check the live state per frame instead, and
+      // never let sendMedia() throw: it throws when the socket isn't OPEN,
+      // and that throw lands inside the media WebSocket's async 'message'
+      // handler as an unhandled rejection.
+      if (connection.readyState !== 1 /* OPEN */) {
+        sendFailures++;
+        if (sendFailures === 1 || sendFailures % 100 === 0) {
+          console.log(`[stt] dropping audio, socket not open (readyState=${connection.readyState}, ${sendFailures} dropped)`);
+        }
+        return;
+      }
+      try {
+        // Buffer already satisfies ArrayBufferView — no slicing needed.
+        connection.sendMedia(chunk);
+      } catch (err) {
+        sendFailures++;
+        console.error("[stt] sendMedia failed:", err);
         return;
       }
       audioChunksSent++;
       if (audioChunksSent === 1 || audioChunksSent % 100 === 0) {
         console.log(`[stt] sendAudio: chunk #${audioChunksSent}, ${chunk.byteLength} bytes`);
       }
-      // Buffer already satisfies ArrayBufferView — no slicing needed.
-      connection.sendMedia(chunk);
     },
     close() {
       console.log(`[stt] closing after ${audioChunksSent} audio chunk(s) sent total`);

@@ -49,7 +49,11 @@ export async function extractAndApply({
       {
         role: "system",
         content:
-          "You review a finished support call transcript and decide what's worth remembering. Be conservative — most calls produce no KB facts and no instruction change; only flag things that are genuinely new and generally useful.",
+          "You review a finished support call transcript and decide what's worth remembering. Be conservative — most calls produce no KB facts and no instruction change; only flag things that are genuinely new and generally useful.\n\n" +
+          // A real call's "I don't have information about that" got saved as
+          // the KB fact "JETZT does not provide voice assistants", which then
+          // got served back as truth on later calls.
+          "kbFacts must be facts about JETZT that were stated with authority — never the agent saying it doesn't know, can't help, or has no information, and never something the caller asked about but nobody confirmed. The agent's own gaps belong in suggestedInstructionChange at most, not kbFacts.",
       },
       {
         role: "user",

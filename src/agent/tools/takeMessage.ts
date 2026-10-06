@@ -1,5 +1,6 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
+import { isSimulatedRun } from "../../calls/simulation";
 import { supabase } from "../../supabase/client";
 import { EMAIL_CONFIRMATION_INSTRUCTIONS, isPlausibleEmail } from "../emailConfirm";
 
@@ -14,10 +15,11 @@ export const takeMessageTool = tool(
     callerPhone: string;
     message: string;
     contactEmail: string;
-  }) => {
+  }, runConfig) => {
     if (!isPlausibleEmail(contactEmail)) {
       return "That email doesn't look valid — spell it back to the caller and confirm before calling this tool again.";
     }
+    if (isSimulatedRun(runConfig)) return "Message saved. Tell the caller someone will respond soon.";
 
     const { error } = await supabase.from("fallback_messages").insert({
       call_control_id: callControlId,

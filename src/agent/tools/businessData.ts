@@ -1,5 +1,6 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
+import { isSimulatedRun } from "../../calls/simulation";
 import { supabase } from "../../supabase/client";
 
 /**
@@ -40,7 +41,8 @@ export const lookupLeadTool = tool(
 );
 
 export const updateLeadNoteTool = tool(
-  async ({ phoneNumber, note }: { phoneNumber: string; note: string }) => {
+  async ({ phoneNumber, note }: { phoneNumber: string; note: string }, runConfig) => {
+    if (isSimulatedRun(runConfig)) return "Saved.";
     const { error } = await supabase
       .from("leads")
       .update({ notes: note })

@@ -1,6 +1,13 @@
 import { supabase } from "../supabase/client";
 
-export interface CalendlyBooking {
+// Meetings booked by phone, so a later call can find "their" meeting to
+// cancel or move without the caller knowing any ids. The table is still
+// named calendly_bookings from before the switch to Google Calendar —
+// event_uuid now holds the Google Calendar event id. v1 assumes one
+// active booking per caller phone number.
+const TABLE = "calendly_bookings";
+
+export interface Booking {
   id: string;
   caller_phone: string;
   event_uuid: string;
@@ -10,12 +17,6 @@ export interface CalendlyBooking {
   status: "booked" | "cancelled";
 }
 
-/** Pulls the trailing uuid off a Calendly resource URI like
- *  https://api.calendly.com/scheduled_events/{uuid}. */
-export function eventUuidFromUri(uri: string): string {
-  return uri.split("/").filter(Boolean).pop() ?? uri;
-}
-
 export async function recordBooking(params: {
   callerPhone: string;
   eventUuid: string;
@@ -23,7 +24,7 @@ export async function recordBooking(params: {
   inviteeEmail: string;
   scheduledTime: string;
 }): Promise<void> {
-  const { error } = await supabase.from("calendly_bookings").insert({
+  const { error } = await supabase.from(TABLE).insert({
     caller_phone: params.callerPhone,
     event_uuid: params.eventUuid,
     invitee_name: params.inviteeName,
@@ -41,9 +42,9 @@ export async function recordBooking(params: {
  */
 export async function findActiveBooking(
   callerPhone: string
-): Promise<CalendlyBooking | null> {
+): Promise<Booking | null> {
   const { data, error } = await supabase
-    .from("calendly_bookings")
+    .from(TABLE)
     .select("*")
     .eq("caller_phone", callerPhone)
     .eq("status", "booked")
@@ -60,25 +61,20 @@ export async function findActiveBooking(
 
 export async function markCancelled(bookingId: string): Promise<void> {
   const { error } = await supabase
-    .from("calendly_bookings")
+    .from(TABLE)
     .update({ status: "cancelled", updated_at: new Date().toISOString() })
     .eq("id", bookingId);
   if (error) console.error("markCancelled failed:", error.message);
 }
 
-export async function replaceWithReschedule(
-  bookingId: string,
-  newEventUuid: string,
-  newScheduledTime: string
-): Promise<void> {
+export async function markRescheduled(bookingId: string, newScheduledTime: string): Promise<void> {
   const { error } = await supabase
-    .from("calendly_bookings")
+    .from(TABLE)
     .update({
-      event_uuid: newEventUuid,
       scheduled_time: newScheduledTime,
       status: "booked",
       updated_at: new Date().toISOString(),
     })
     .eq("id", bookingId);
-  if (error) console.error("replaceWithReschedule failed:", error.message);
+  if (error) console.error("markRescheduled failed:", error.message);
 }
