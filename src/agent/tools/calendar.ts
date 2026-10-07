@@ -8,8 +8,13 @@ import { findOpenSlots, isSlotOpen, slotEnd } from "../../google/availability";
 import { cancelMeeting, createMeeting, googleCalendarConfigured, moveMeeting } from "../../google/calendar";
 import { findActiveBooking, markCancelled, markRescheduled, recordBooking } from "../../bookings/bookings";
 
-const NOT_CONFIGURED =
-  "Online booking isn't set up yet — tell the caller the team will reach out to schedule, and use take_message to capture their email.";
+// Every result that isn't a success starts with "NOT DONE" and says what to
+// tell the caller. On a test call the model got the old soft wording ("online
+// booking isn't set up yet...") back from cancel_meeting and still told the
+// caller their meeting was cancelled.
+function notConfigured(action: string): string {
+  return `NOT DONE — ${action} isn't available because online scheduling isn't set up yet. Nothing was changed. Don't tell the caller it worked: say the team will take care of it, and use take_message to pass it on.`;
+}
 const MAX_DAYS_OFFERED = 3;
 const MAX_SLOTS_PER_DAY = 4;
 
@@ -31,7 +36,7 @@ function spoken(date: Date, timeZone: string): string {
 
 export const getAvailableSlotsTool = tool(
   async ({ fromDate, timeZone }: { fromDate: string | null; timeZone: string }) => {
-    if (!googleCalendarConfigured()) return NOT_CONFIGURED;
+    if (!googleCalendarConfigured()) return notConfigured("Checking open times");
     timeZone = validTimeZone(timeZone);
     const from = fromDate ? new Date(`${fromDate}T00:00:00Z`) : new Date();
 
@@ -40,7 +45,7 @@ export const getAvailableSlotsTool = tool(
       slots = await findOpenSlots(Number.isNaN(from.getTime()) ? new Date() : from, 7);
     } catch (err) {
       console.error("[calendar] availability failed:", err);
-      return "Couldn't check the calendar right now. Offer to take a message so the team can schedule.";
+      return "NOT DONE — couldn't check the calendar right now. Offer to take a message so the team can schedule.";
     }
     if (slots.length === 0) {
       return "No open times in the next week from that date. Offer a later week, or take a message.";
@@ -98,13 +103,13 @@ export const bookMeetingTool = tool(
     },
     runConfig
   ) => {
-    if (!googleCalendarConfigured()) return NOT_CONFIGURED;
+    if (!googleCalendarConfigured()) return notConfigured("Booking");
     if (!isPlausibleEmail(inviteeEmail)) {
-      return "That email doesn't look valid — spell it back to the caller and confirm before calling this tool again.";
+      return "NOT DONE — that email doesn't look valid. Spell it back to the caller and confirm before calling this tool again.";
     }
     const start = new Date(startTime);
     if (Number.isNaN(start.getTime())) {
-      return "That startTime isn't valid — use the exact bracketed value from get_available_slots.";
+      return "NOT DONE — that startTime isn't valid. Use the exact bracketed value from get_available_slots.";
     }
     timeZone = validTimeZone(timeZone);
     if (isSimulatedRun(runConfig)) {
@@ -113,7 +118,7 @@ export const bookMeetingTool = tool(
 
     try {
       if (!(await isSlotOpen(start))) {
-        return "That time was just taken or isn't available. Apologize briefly, call get_available_slots again, and offer new times.";
+        return "NOT DONE — that time was just taken or isn't available. Apologize briefly, call get_available_slots again, and offer new times.";
       }
       const meeting = await createMeeting({
         title: `JETZT call with ${inviteeName}`,
@@ -134,7 +139,7 @@ export const bookMeetingTool = tool(
       });
     } catch (err) {
       console.error("[calendar] booking failed:", err);
-      return "Booking failed on our side. Apologize, and use take_message so the team can schedule it.";
+      return "NOT DONE — booking failed on our side. Apologize, and use take_message so the team can schedule it.";
     }
     return `Booked for ${spoken(start, timeZone)}. A calendar invite with the Google Meet link is on its way to ${inviteeEmail}. Tell the caller that — don't read out any link.`;
   },
@@ -154,16 +159,16 @@ export const bookMeetingTool = tool(
 
 export const cancelMeetingTool = tool(
   async ({ callerPhone }: { callerPhone: string }, runConfig) => {
-    if (!googleCalendarConfigured()) return NOT_CONFIGURED;
+    if (!googleCalendarConfigured()) return notConfigured("Cancelling");
     const booking = isSimulatedRun(runConfig) ? null : await findActiveBooking(callerPhone);
     if (!booking) {
-      return "No upcoming meeting found for this caller — let them know, and ask if they'd like to book one instead.";
+      return "NOT DONE — no upcoming meeting found for this caller. Nothing was cancelled. Let them know, and ask if they'd like to book one instead.";
     }
     try {
       await cancelMeeting(booking.event_uuid);
     } catch (err) {
       console.error("[calendar] cancel failed:", err);
-      return "Cancelling failed on our side. Apologize, and use take_message so the team can cancel it.";
+      return "NOT DONE — cancelling failed on our side. Apologize, and use take_message so the team can cancel it.";
     }
     await markCancelled(booking.id);
     return `Cancelled the meeting that was set for ${booking.scheduled_time}. Google Calendar has emailed ${booking.invitee_email} the cancellation.`;
@@ -183,23 +188,23 @@ export const rescheduleMeetingTool = tool(
     { callerPhone, newStartTime, timeZone }: { callerPhone: string; newStartTime: string; timeZone: string },
     runConfig
   ) => {
-    if (!googleCalendarConfigured()) return NOT_CONFIGURED;
+    if (!googleCalendarConfigured()) return notConfigured("Rescheduling");
     const booking = isSimulatedRun(runConfig) ? null : await findActiveBooking(callerPhone);
     if (!booking) {
-      return "No upcoming meeting found for this caller to move — offer to book a new one instead (book_meeting).";
+      return "NOT DONE — no upcoming meeting found for this caller to move. Offer to book a new one instead (book_meeting).";
     }
     const start = new Date(newStartTime);
     if (Number.isNaN(start.getTime())) {
-      return "That newStartTime isn't valid — use the exact bracketed value from get_available_slots.";
+      return "NOT DONE — that newStartTime isn't valid. Use the exact bracketed value from get_available_slots.";
     }
     try {
       if (!(await isSlotOpen(start))) {
-        return "That time isn't available. Call get_available_slots again and offer new times.";
+        return "NOT DONE — that time isn't available. Call get_available_slots again and offer new times.";
       }
       await moveMeeting(booking.event_uuid, start, slotEnd(start));
     } catch (err) {
       console.error("[calendar] reschedule failed:", err);
-      return "Moving the meeting failed on our side. Apologize, and use take_message so the team can reschedule.";
+      return "NOT DONE — moving the meeting failed on our side. Apologize, and use take_message so the team can reschedule.";
     }
     await markRescheduled(booking.id, start.toISOString());
     return `Moved to ${spoken(start, validTimeZone(timeZone))}. Same Meet link; Google Calendar has emailed ${booking.invitee_email} the update.`;

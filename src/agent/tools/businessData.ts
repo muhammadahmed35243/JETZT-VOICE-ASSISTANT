@@ -49,7 +49,7 @@ export const updateLeadNoteTool = tool(
       .eq("phone", phoneNumber);
 
     if (error) {
-      return `Couldn't save that to the lead record (${error.message}). Offer to take a message instead.`;
+      return `NOT DONE — couldn't save that to the lead record (${error.message}). Offer to take a message instead.`;
     }
     return "Saved.";
   },

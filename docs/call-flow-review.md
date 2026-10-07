@@ -142,6 +142,32 @@ Telnyx is now given `?token=…` in the stream URL. For real calls a missing
 token is only logged for now. Once one real call shows no "has no valid
 token" warning in `vercel logs`, make it reject the connection.
 
+## Round 3: fixes from the round-2 production run
+
+- **Spelled-out emails were slurred.** Aura runs hyphenated letters together
+  ("s-a-r-a-h" came out as "Sarh"). That's likely why the Aug 25 call looped on
+  email corrections. `prepareForSpeech` in `src/tts/deepgramTts.ts` now
+  rewrites hyphen-spelled runs into groups of three ("S A R, A H") just before
+  synthesis. That format scored 10/10 in a synthesize-then-transcribe A/B test
+  with Deepgram and Whisper. Ordinary hyphenated words are left alone.
+- **The agent claimed it cancelled a meeting that wasn't cancelled.**
+  `cancel_meeting` returned the soft "online booking isn't set up yet"
+  message, and the model told the caller it was done anyway. Every
+  non-success tool result now starts with `NOT DONE —` and says what to tell
+  the caller. The prompt also has a rule: never confirm an action the tool
+  result didn't confirm.
+- **Fillers match the action.** Lookups still rotate "One sec." / "Let me
+  check." Booking, cancelling, moving, and taking a message now get "Booking
+  that now.", "Cancelling that now.", "Moving that now.", and "Writing that
+  down." `update_lead_note` gets no filler. The prompt asks the model for the
+  same wording.
+- **Faster answers to common questions.** Hand-entered `knowledge_base` rows
+  (anything not `source = 'call_extraction'`) are now in the system prompt, up
+  to 6,000 characters. KB lookups had taken 4 to 6 seconds. Auto-extracted
+  facts stay search-only, so a bad one can't reach every caller.
+- **Simulator:** the caller now waits for 3.5s of agent quiet (was 1.5s)
+  before replying, so it no longer talks over the answer after a filler.
+
 ## Still needed (not code)
 
 1. **Fill in `core_instructions`** in the admin portal: what JETZT sells, who

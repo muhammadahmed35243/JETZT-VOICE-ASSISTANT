@@ -17,7 +17,7 @@ export const takeMessageTool = tool(
     contactEmail: string;
   }, runConfig) => {
     if (!isPlausibleEmail(contactEmail)) {
-      return "That email doesn't look valid — spell it back to the caller and confirm before calling this tool again.";
+      return "NOT DONE — that email doesn't look valid. Spell it back to the caller and confirm before calling this tool again.";
     }
     if (isSimulatedRun(runConfig)) return "Message saved. Tell the caller someone will respond soon.";
 
@@ -29,7 +29,7 @@ export const takeMessageTool = tool(
     });
 
     if (error) {
-      return `Couldn't save the message (${error.message}) — apologize to the caller and let them know to try again later.`;
+      return `NOT DONE — couldn't save the message (${error.message}). Don't tell the caller it was saved: apologize, and say the team can reach them at the number they're calling from.`;
     }
     return "Message saved. Tell the caller someone will respond soon.";
   },

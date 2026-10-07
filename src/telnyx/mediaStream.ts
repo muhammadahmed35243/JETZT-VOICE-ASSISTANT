@@ -45,9 +45,23 @@ const SILENCE_PROMPTS = [
 ];
 const TURN_FAILED_REPLY = "Sorry, I didn't catch that. Could you say it again?";
 // Played when the model goes straight to a tool call without saying
-// anything, so the caller isn't left in silence while it runs. Rotated so
-// it doesn't sound canned on a call with several lookups.
-const TOOL_FILLERS = ["One sec.", "Let me check.", "Just a moment."];
+// anything, so the caller isn't left in silence while it runs. Matched to
+// what the tool does: "Let me check." fits a lookup, not a booking or a
+// cancellation. Lookups rotate so a call with several doesn't sound canned.
+const LOOKUP_FILLERS = ["One sec.", "Let me check.", "Let me take a look."];
+const ACTION_FILLERS: Record<string, string> = {
+  book_meeting: "Booking that now.",
+  cancel_meeting: "Cancelling that now.",
+  reschedule_meeting: "Moving that now.",
+  take_message: "Writing that down.",
+};
+// Quick background writes: the reply that follows covers them.
+const SILENT_TOOLS = new Set(["update_lead_note"]);
+
+function fillerFor(session: CallSession, toolName: string): string | null {
+  if (SILENT_TOOLS.has(toolName)) return null;
+  return ACTION_FILLERS[toolName] ?? LOOKUP_FILLERS[session.fillersGiven++ % LOOKUP_FILLERS.length];
+}
 // A first sentence this short ("Sorry.", "Got it.") is held and spoken with
 // the next one. Sent alone, it played and then left a gap while the next
 // sentence was still being generated — "Sorry. ... I didn't catch that."
@@ -341,8 +355,8 @@ async function runAgentTurn(session: CallSession, ws: MediaSocket, userText: str
           held = "";
         }
         if (saidSomething || toolName === END_CALL_TOOL_NAME) return; // end_call carries its own goodbye
-        const filler = TOOL_FILLERS[session.fillersGiven++ % TOOL_FILLERS.length];
-        speakQueue = speakQueue.then(() => speakFixed(session, ws, filler));
+        const filler = fillerFor(session, toolName);
+        if (filler) speakQueue = speakQueue.then(() => speakFixed(session, ws, filler));
       },
     });
     console.log(`[turn] model finished responding for ${session.callControlId}: ${JSON.stringify(responseText)}`);

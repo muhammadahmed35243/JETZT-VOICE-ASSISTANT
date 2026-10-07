@@ -51,8 +51,27 @@ async function requestSpeech(text: string): Promise<Response> {
   throw lastErr;
 }
 
+// The model spells things out hyphenated ("s-a-r-a-h"), but Aura runs
+// hyphenated letters together and drops some — the caller hears "s-a-r-h".
+// A/B tested by synthesizing each format and transcribing it back with two
+// recognizers (Deepgram + Whisper) over sarah/klein/muhammad/oconnor/8775:
+// hyphens and "S. A. R." dropped letters, "S, A, R, A, H" lost oconnor's
+// double O, and groups of three ("S A R, A H") came back perfect 10/10 —
+// also the shortest audio, and how people spell over the phone anyway.
+// Word boundaries keep "follow-up", "e-mail" and "30-minute" untouched.
+const HYPHEN_SPELLED = /\b[A-Za-z0-9](?:-[A-Za-z0-9])+\b/g;
+
+export function prepareForSpeech(text: string): string {
+  return text.replace(HYPHEN_SPELLED, (run) => {
+    const chars = run.split("-").map((c) => c.toUpperCase());
+    const groups: string[] = [];
+    for (let i = 0; i < chars.length; i += 3) groups.push(chars.slice(i, i + 3).join(" "));
+    return groups.join(", ");
+  });
+}
+
 export async function* synthesizeSpeech(text: string): AsyncGenerator<Buffer> {
-  const res = await requestSpeech(text);
+  const res = await requestSpeech(prepareForSpeech(text));
   const reader = res.body!.getReader();
   while (true) {
     const { done, value } = await reader.read();

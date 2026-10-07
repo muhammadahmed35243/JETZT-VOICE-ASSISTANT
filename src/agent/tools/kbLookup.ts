@@ -12,10 +12,10 @@ export const kbLookupTool = tool(
     });
 
     if (error) {
-      return `Knowledge base search failed: ${error.message}`;
+      return `NOT DONE — knowledge base search failed (${error.message}). Don't guess an answer: say you'll have the team confirm, and offer to take a message.`;
     }
     if (!data || data.length === 0) {
-      return "No matching knowledge base content found.";
+      return "No matching knowledge base content found. Don't guess: say you'll have the team confirm, and offer to take a message or book a call.";
     }
     return data
       .map((row: { content: string; similarity: number }) => row.content)

@@ -322,7 +322,10 @@ async function runCall(name: string, script: Step[] | Persona): Promise<CallResu
     while (callerSpeaking) await sleep(20);
   };
 
-  const agentDone = () => Date.now() > playbackEndsAt + 300 && Date.now() - lastAgentAudioAt > 1500;
+  // A filler ("One sec.") followed by a 2-4s lookup is still one agent turn —
+  // at 1500ms the simulated caller started talking over the real answer.
+  const AGENT_QUIET_MS = 3500;
+  const agentDone = () => Date.now() > playbackEndsAt + 300 && Date.now() - lastAgentAudioAt > AGENT_QUIET_MS;
 
   /** Waits for the agent's reply to finish; returns what it said. */
   const awaitReply = async (): Promise<string | null> => {
