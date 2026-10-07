@@ -168,6 +168,34 @@ token" warning in `vercel logs`, make it reject the connection.
 - **Simulator:** the caller now waits for 3.5s of agent quiet (was 1.5s)
   before replying, so it no longer talks over the answer after a filler.
 
+## Round 4: full code review against the round-2 findings
+
+- **The 97s silence wasn't network noise.** GPT-4o had no timeout (the
+  OpenAI client defaults to 10 minutes) and LangChain retried up to 6 times
+  with backoff. Now the response must start within 8s, with one retry; after
+  that the caller hears a "say that again" line. Embeddings, used mid-call by
+  KB lookups, get a 5s timeout and one retry.
+- **A lost email lost the message too.** `take_message` required a valid
+  email, so when read-backs failed, the caller's message couldn't be saved.
+  It now accepts no email, and the team calls back on the caller's number.
+  This needs migration `0002_fallback_message_optional_email.sql`.
+  The prompt and the email instructions now agree on stopping after two
+  tries. Before, one said two tries and the other said to keep asking.
+- **A post-call failure could crash other calls.** If the post-call step
+  threw (for example, the extraction model call failing), it became an
+  unhandled rejection. That can kill the function instance along with any
+  other call it's serving. It's now caught and logged. One failed transcript
+  write no longer stops every later turn from being logged either.
+- **Questions no longer wait 1.5s extra.** The unfinished-thought hold
+  matched questions ending in "to?", "that?" and similar. Only a trailing
+  "." or "!" counts as unfinished now.
+- **A better failure line after a filler.** If "Let me check." already
+  played and the turn then failed, the agent asked "Sorry, I didn't catch
+  that." Now it says "Sorry, I couldn't pull that up just now."
+- **Current time in local time.** The prompt now gives the time in words in
+  the business's timezone instead of a UTC timestamp. During a US evening,
+  UTC is already tomorrow.
+
 ## Still needed (not code)
 
 1. **Fill in `core_instructions`** in the admin portal: what JETZT sells, who
@@ -176,7 +204,13 @@ token" warning in `vercel logs`, make it reject the connection.
 2. **Delete the wrong `knowledge_base` row** (`source = 'call_extraction'`,
    "JETZT does not provide…voice assistants"). Also review the `insights`
    table for the same call.
-3. Make a test call after deploying, while running `vercel logs`. The new
+3. **Run `supabase/migrations/0002_fallback_message_optional_email.sql`** in
+   the Supabase SQL editor. Until you do, a message with no email fails to
+   save, and the agent tells the caller it wasn't saved.
+4. **Set the Google Calendar env vars** (`GOOGLE_CALENDAR_CLIENT_ID`,
+   `_CLIENT_SECRET`, `_REFRESH_TOKEN`). Until then, booking, cancelling and
+   rescheduling all return "NOT DONE".
+5. Make a test call after deploying, while running `vercel logs`. The new
    `[turn] … queued` and `[stt] dropping audio` log lines show directly
    whether causes #1 and #2 were what hit the Aug 27 to Sep 22 calls.
 

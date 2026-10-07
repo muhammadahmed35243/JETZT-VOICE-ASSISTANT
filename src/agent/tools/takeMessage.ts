@@ -14,9 +14,9 @@ export const takeMessageTool = tool(
     callControlId: string;
     callerPhone: string;
     message: string;
-    contactEmail: string;
+    contactEmail: string | null;
   }, runConfig) => {
-    if (!isPlausibleEmail(contactEmail)) {
+    if (contactEmail !== null && !isPlausibleEmail(contactEmail)) {
       return "NOT DONE — that email doesn't look valid. Spell it back to the caller and confirm before calling this tool again.";
     }
     if (isSimulatedRun(runConfig)) return "Message saved. Tell the caller someone will respond soon.";
@@ -29,7 +29,7 @@ export const takeMessageTool = tool(
     });
 
     if (error) {
-      return `NOT DONE — couldn't save the message (${error.message}). Don't tell the caller it was saved: apologize, and say the team can reach them at the number they're calling from.`;
+      return `NOT DONE — couldn't save the message (${error.message}). Don't tell the caller it was saved: apologize, and ask them to call back a bit later.`;
     }
     return "Message saved. Tell the caller someone will respond soon.";
   },
@@ -41,7 +41,12 @@ export const takeMessageTool = tool(
       callControlId: z.string(),
       callerPhone: z.string(),
       message: z.string().describe("What the caller needs, in their own words"),
-      contactEmail: z.string().describe("Confirmed by spelling it back before calling this tool"),
+      contactEmail: z
+        .string()
+        .nullable()
+        .describe(
+          "Confirmed by spelling it back before calling this tool. null only if it still wasn't right after two tries — the team will call back on callerPhone instead."
+        ),
     }),
   }
 );

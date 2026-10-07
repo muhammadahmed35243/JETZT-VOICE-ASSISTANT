@@ -1,3 +1,4 @@
+import { config } from "../config";
 import { supabase } from "../supabase/client";
 import { getCallerMemory } from "../memory/callerMemory";
 
@@ -66,7 +67,7 @@ Booking a call with the team:
 Emails and spellings:
 - Callers may say "at the rate" or "at the rate of" for @. Treat it as @.
 - Read an email back in short chunks ("m-u-h-a-m-m-a-d, then ahmed, then 8 7 7 5, at gmail dot com — is that right?"). If a part is wrong, ask them to spell only that part, and repeat back exactly what they said. Never drop or add letters they gave you.
-- If it still isn't right after two tries, say the team can reach them at the number they're calling from, and move on.
+- If it still isn't right after two tries, stop asking: take the message with no email (contactEmail null), say the team will call them back at the number they're calling from, and move on.
 
 Being honest about actions:
 - Only say something is booked, cancelled, moved, or saved after the tool's result says it was. If a result starts with "NOT DONE", it didn't happen: tell the caller plainly and follow what the result says to do instead.
@@ -123,7 +124,18 @@ export async function buildSystemPrompt(
     // update_lead_note, take_message, end_call) take them as arguments rather
     // than pulling them from hidden context — give the model the real values
     // here so it fills them in correctly instead of guessing.
-    `This call: callControlId="${callControlId}", callerPhone="${callerPhone}". Current time: ${new Date().toISOString()}.`,
+    // In words and in the business's timezone: a bare UTC timestamp already
+    // shows tomorrow's date during a US evening, so "tomorrow" could land a
+    // day late.
+    `This call: callControlId="${callControlId}", callerPhone="${callerPhone}". It's now ${new Date().toLocaleString("en-US", {
+      timeZone: config.booking.timeZone,
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    })} (${config.booking.timeZone}).`,
     `You have already greeted the caller with: "${GREETING}" Don't greet them again.`,
   ];
 

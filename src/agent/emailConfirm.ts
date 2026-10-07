@@ -14,7 +14,8 @@ When you need to capture someone's email address by voice:
    (e.g. "j-o-h-n dot smith at gmail dot com"), and ask the caller to
    confirm it's correct.
 3. Only proceed (book the meeting, save the message) after they confirm.
-   If they say it's wrong, ask again and repeat step 2.
+   If they say it's wrong, ask them to spell only the wrong part and repeat
+   step 2. After two failed tries, stop and go on without the email.
 Speech-to-text reliably mishears domains and symbols in emails, so do not
 skip this confirmation step even if the transcript looks clean.
 `.trim();

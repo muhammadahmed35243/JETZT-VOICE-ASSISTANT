@@ -35,6 +35,13 @@ const model = new ChatOpenAI({
   // Hard ceiling, not the target — the system prompt asks for one or two
   // sentences. This just stops a runaway monologue on a phone line.
   maxTokens: 250,
+  // A caller is waiting in silence for this. Unset, the OpenAI client waits
+  // up to 10 minutes per request and LangChain retries 6 times with backoff —
+  // a round-2 test call sat 97s with no reply. Bounds the wait for the
+  // response to start (not the streamed reply itself); one retry, then the
+  // turn fails and the caller hears TURN_FAILED_REPLY instead of nothing.
+  timeout: 8000,
+  maxRetries: 1,
 }).bindTools(tools);
 
 async function agentNode(state: typeof MessagesAnnotation.State) {

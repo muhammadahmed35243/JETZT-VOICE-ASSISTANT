@@ -32,9 +32,11 @@ const SIMULATED_SILENCE_REPROMPT_MS = 20000;
 // "So I was wondering," + a breath is not the end of a turn, but endpointing
 // can't tell. When the words so far look unfinished, hold this much longer
 // for the caller to carry on; any new speech cancels the hold.
+// A question is a finished turn even when its last word is on the list —
+// "Who am I speaking to?" or "Can you do that?" shouldn't wait 1.5s extra.
 const INCOMPLETE_THOUGHT_HOLD_MS = 1500;
 const TRAILING_CONTINUATION =
-  /(,|\b(and|but|or|so|because|cause|if|that|the|a|an|to|of|for|with|my|our|is|are|was|um|uh|like|wondering|thinking|wanted to|was going to))[.?!]?$/i;
+  /(,|\b(and|but|or|so|because|cause|if|that|the|a|an|to|of|for|with|my|our|is|are|was|um|uh|like|wondering|thinking|wanted to|was going to))[.!]?$/i;
 
 function looksIncomplete(text: string): boolean {
   return TRAILING_CONTINUATION.test(text.trim());
@@ -44,6 +46,9 @@ const SILENCE_PROMPTS = [
   "I'll let you go for now. Feel free to call back anytime. Bye!",
 ];
 const TURN_FAILED_REPLY = "Sorry, I didn't catch that. Could you say it again?";
+// When a filler like "Let me check." already played, the caller knows they
+// were heard — asking them to repeat would sound like it wasn't listening.
+const TOOL_FAILED_REPLY = "Sorry, I couldn't pull that up just now. Could you ask me again?";
 // Played when the model goes straight to a tool call without saying
 // anything, so the caller isn't left in silence while it runs. Matched to
 // what the tool does: "Let me check." fits a lookup, not a booking or a
@@ -313,6 +318,7 @@ async function runAgentTurn(session: CallSession, ws: MediaSocket, userText: str
   let sentenceBuffer = "";
   let speakQueue: Promise<void> = Promise.resolve();
   let sentenceCount = 0;
+  let fillerSpoken = false;
   let goodbye: string | undefined;
 
   let held = "";
@@ -356,7 +362,10 @@ async function runAgentTurn(session: CallSession, ws: MediaSocket, userText: str
         }
         if (saidSomething || toolName === END_CALL_TOOL_NAME) return; // end_call carries its own goodbye
         const filler = fillerFor(session, toolName);
-        if (filler) speakQueue = speakQueue.then(() => speakFixed(session, ws, filler));
+        if (filler) {
+          fillerSpoken = true;
+          speakQueue = speakQueue.then(() => speakFixed(session, ws, filler));
+        }
       },
     });
     console.log(`[turn] model finished responding for ${session.callControlId}: ${JSON.stringify(responseText)}`);
@@ -378,7 +387,7 @@ async function runAgentTurn(session: CallSession, ws: MediaSocket, userText: str
     await speakQueue;
     // Silence after the caller speaks is the worst outcome on a phone
     // call — if nothing got said, at least ask them to repeat.
-    if (sentenceCount === 0) await speakFixed(session, ws, TURN_FAILED_REPLY);
+    if (sentenceCount === 0) await speakFixed(session, ws, fillerSpoken ? TOOL_FAILED_REPLY : TURN_FAILED_REPLY);
   } finally {
     session.turnInFlight = false;
     const t = session.turnTiming;
@@ -509,9 +518,10 @@ async function hangUpAfterPlayback(session: CallSession) {
 
 function logTranscript(session: CallSession, role: "caller" | "agent", text: string) {
   if (!text || isSimulatedCall(session.callControlId)) return;
-  session.transcriptWrites = session.transcriptWrites.then(() =>
-    appendTranscriptTurn(session.callControlId, role, text)
-  );
+  // One failed write mustn't break the chain for every later turn.
+  session.transcriptWrites = session.transcriptWrites
+    .then(() => appendTranscriptTurn(session.callControlId, role, text))
+    .catch((err) => console.error(`[call] transcript write failed for ${session.callControlId}:`, err));
 }
 
 async function finalizeCall(session: CallSession) {
@@ -521,14 +531,22 @@ async function finalizeCall(session: CallSession) {
   if (session.finalized) return;
   session.finalized = true;
   if (isSimulatedCall(session.callControlId)) return;
-  await session.transcriptWrites;
-  const transcriptText = await getTranscriptText(session.callControlId);
-  await finalizeCallLog(session.callControlId);
-  if (transcriptText) {
-    await extractAndApply({
-      callControlId: session.callControlId,
-      callerPhone: session.callerPhone,
-      transcriptText,
-    });
+  // Caught here, not left to the caller: from the 'stop' handler a throw
+  // (e.g. the extraction model call failing) was an unhandled rejection,
+  // which can take down the function instance — and with it any other call
+  // it's serving at the time.
+  try {
+    await session.transcriptWrites;
+    const transcriptText = await getTranscriptText(session.callControlId);
+    await finalizeCallLog(session.callControlId);
+    if (transcriptText) {
+      await extractAndApply({
+        callControlId: session.callControlId,
+        callerPhone: session.callerPhone,
+        transcriptText,
+      });
+    }
+  } catch (err) {
+    console.error(`[call] finalizing ${session.callControlId} failed:`, err);
   }
 }
